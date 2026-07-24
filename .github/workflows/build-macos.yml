@@ -45,7 +45,7 @@ jobs:
 
     steps:
       - name: Check out the code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -61,7 +61,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "20"
           cache: npm
@@ -75,16 +75,19 @@ jobs:
       # They are not needed to BUILD, so they're deliberately not installed
       # here. The tester runs: brew install streamlink ffmpeg
 
+      # No signing env vars are set here ON PURPOSE.
+      #
+      # Do NOT add `APPLE_SIGNING_IDENTITY: ""` thinking it means "skip
+      # signing" - it doesn't. Tauri treats the variable being present as
+      # "signing was requested", then looks up an identity whose NAME is
+      # the empty string, doesn't find it, and fails the bundle with:
+      #   error: The specified item could not be found in the keychain.
+      # Leaving it unset entirely is what actually skips codesigning.
       - name: Build the .app and .dmg
         run: npm run tauri build -- --target ${{ matrix.target }}
-        env:
-          # Explicitly unsigned: without this Tauri may try to find a
-          # signing identity in the keychain and fail the build when there
-          # isn't one.
-          APPLE_SIGNING_IDENTITY: ""
 
       - name: Upload the .dmg
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: TwitchNative-macos-${{ matrix.target }}
           # Glob so the version in the filename doesn't have to be hardcoded.
@@ -96,7 +99,7 @@ jobs:
       # it can be zipped and run directly.
       - name: Upload the .app as a fallback
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: TwitchNative-macos-${{ matrix.target }}-app
           path: src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
