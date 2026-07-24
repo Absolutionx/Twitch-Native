@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Twitch Native</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+
+    <!--
+      Sibling of #app, not a child - see the CSS comment on .deps-banner
+      for why. Hidden by default; shown by main.js on startup if
+      check_stream_deps() finds either tool missing.
+    -->
+    <div id="deps-banner" class="deps-banner" style="display:none">
+      <svg viewBox="0 0 24 24" width="18" height="18" class="deps-banner-icon"><path d="M12 2 1 21h22L12 2zm0 6l6.5 11h-13L12 8zm-1 3v4h2v-4h-2zm0 5v2h2v-2h-2z" fill="currentColor"/></svg>
+      <span class="deps-banner-text" id="deps-banner-text">
+        Missing <strong id="deps-banner-missing-list"></strong> - streaming won't work until these are installed.
+      </span>
+      <button id="deps-banner-install-btn" class="deps-banner-install-btn">Install</button>
+      <button id="deps-banner-dismiss" class="deps-banner-dismiss" title="Dismiss" aria-label="Dismiss">
+        <svg viewBox="0 0 24 24" width="14" height="14"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+      </button>
+    </div>
+
+    <div id="app">
+      <!--
+        Lives as a sibling of <header>, not inside it - header is what
+        gets collapsed (grid row height -> 0, see #app.header-collapsed
+        below), so the toggle to bring it back has to live somewhere that
+        ISN'T removed along with it. position:fixed keeps it pinned to
+        the same screen location regardless of the grid's current state,
+        same reasoning as #quality-menu being a sibling of #app entirely
+        (see its own comment further down) rather than nested inside
+        whatever it's positioned relative to.
+      -->
+      <button id="header-collapse-toggle" class="header-collapse-toggle" title="Collapse top bar">
+        <svg viewBox="0 0 24 24" width="12" height="12"><path d="M7 10l5 5 5-5z" fill="currentColor"/></svg>
+      </button>
+      <header>
+        <div class="nav-tabs">
+          <button id="home-tab" class="nav-tab nav-tab-active">Home</button>
+          <button id="browse-tab" class="nav-tab">Browse</button>
+        </div>
+        <!--
+          Platform toggle: which service Home/Browse/search/watching all
+          point at. One button, two states - Twitch (purple border,
+          default) and Kick (green border) - clicked to flip between
+          them. Lives right of the nav tabs because it changes what
+          those tabs SHOW; state + everything that reacts to it lives in
+          platform.js and applyPlatformUi() in main.js.
+        -->
+        <button id="platform-toggle" class="platform-toggle platform-twitch" title="Switch platform">Twitch</button>
+        <!--
+          Shown only while a stream is running AND Home/Browse is currently
+          covering it (see updateBackToStreamBtn() in main.js) - the
+          <video> pipeline keeps playing in the background the whole
+          time you're browsing (this was already true before this button
+          existed; switching tabs only ever hid #video-frame, never
+          actually stopped playback), but there was previously no way back
+          to it except re-clicking the same channel from a card/sidebar
+          entry, which restarted the stream from scratch instead of just
+          bringing the still-running one back into view.
+        -->
+        <button id="back-to-stream-btn" class="back-to-stream-btn" style="display:none">
+          <svg viewBox="0 0 24 24" width="14" height="14"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+          <span id="back-to-stream-label">Now watching</span>
+        </button>
+        <!-- Input and its action are one attached control: the button is
+             the verb for the field, so they share a border and read as a
+             single launcher instead of two floating elements. -->
+        <div class="channel-launcher">
+          <input id="channel-input" type="text" placeholder="Twitch channel name" />
+          <button id="watch-btn">Watch</button>
+        </div>
+        <!-- Status sits NEXT to the launcher (cause and effect together)
+             as a quiet pill; empty when idle - the old far-right
+             "Playing: x" was both redundant and stranded. -->
+        <span class="status" id="status-text"></span>
+        <!-- Account control lives at the right edge like every app's;
+             it was previously mid-left, styled like an action button,
+             which made a username read as a mystery action. -->
+        <button id="login-btn">Log in with Twitch</button>
+        <!--
+          Kick login, shown only in Kick mode (applyPlatformUi toggles
+          it). Separate button + separate OAuth flow from Twitch's -
+          the two logins are independent (see kick_oauth.rs). Reuses the
+          login-btn styling; the platform-kick class tints it green.
+          When the build ships without a real Kick client secret,
+          applyPlatformUi hides it and shows an inline note instead
+          (kick_oauth_configured gates this).
+        -->
+        <button id="kick-login-btn" class="platform-kick" style="display:none">Log in with Kick</button>
+      </header>
+
+      <div id="channels-sidebar">
+        <!-- Wrapped as one unit so Kick mode can hide the whole Twitch-
+             auth-bound Followed section in one style flip (there's no
+             Kick login in this app, so there's nothing equivalent to
+             show) - see applyPlatformUi() in main.js. -->
+        <div id="followed-section">
+          <div class="sidebar-section-title" id="followed-section-title">Followed Channels</div>
+          <div id="followed-channels-list"></div>
+          <button id="followed-show-more-btn" class="sidebar-show-more" style="display:none"></button>
+          <div id="followed-login-prompt" class="sidebar-login-prompt">
+            Log in with Twitch to see your followed channels here.
+          </div>
+          <div class="sidebar-section-divider"></div>
+        </div>
+        <!-- Retitled per platform by applyPlatformUi() in main.js:
+             "Live Channels" (Twitch) / "Recommended" (Kick - the label
+             kick.com's own sidebar uses for its equivalent rail). -->
+        <div class="sidebar-section-title" id="top-live-section-title">Live Channels</div>
+        <div id="top-live-list"></div>
+      </div>
+
+      <div id="video-column">
+        <div id="home-feed"></div>
+        <div id="browse-page"></div>
+        <div id="vods-page"></div>
+        <div id="video-frame">
+          <!--
+            Its own space above #video-region, not an overlay on top of it -
+            this one genuinely needs to be (the video itself hasn't started
+            yet/is a different stream than what Drops applies to, so it
+            can't simply sit on top of the video the way the controls bar
+            below now can). Hidden by default; main.js shows/hides it
+            per-channel based on whether that stream currently has Drops
+            enabled (playback here goes through the local streamlink
+            relay, not Twitch's own client, so watch-time never counts
+            toward Drops - see drops.js).
+          -->
+          <div id="drops-banner" class="drops-banner" style="display:none">
+            <svg viewBox="0 0 24 24" width="18" height="18" class="drops-banner-icon"><path d="M12 2c-.3 3.5-4 6.4-4 10.5A4 4 0 0 0 12 17a4 4 0 0 0 4-4.5C16 8.4 12.3 5.5 12 2z" fill="currentColor"/></svg>
+            <span class="drops-banner-text">
+              This channel has Drops enabled, but drops can't be earned while watching here.
+              <a id="drops-banner-link" href="#" target="_blank" rel="noopener noreferrer">Watch on Twitch to earn it</a>
+              <span id="drops-banner-viewers" class="drops-banner-viewers"></span>
+            </span>
+            <button id="drops-banner-dismiss" class="drops-banner-dismiss" title="Dismiss" aria-label="Dismiss">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+          <div id="video-region">
+            <!--
+              Real in-DOM <video> element, fed by MSE for live and hls.js
+              for VODs (see playback-controls.js). This is what makes
+              everything else in
+              this block possible as a genuine CSS overlay: a plain HTML
+              element participates in the webview's normal compositing/
+              z-index stacking, unlike the native mpv window this replaced,
+              which always painted over webview content regardless of CSS.
+              playsinline avoids iOS-style "play in a separate fullscreen
+              player" behavior, not that it applies on desktop, but it's
+              the conventional attribute to set on any embedded player.
+            -->
+            <video id="video-element" playsinline></video>
+            <div class="placeholder" id="video-placeholder">
+              Pick a channel to start watching
+            </div>
+            <!--
+              Center play/pause button - shown only while paused (live or
+              VOD) or before the first frame has decoded. A direct overlay
+              on the video itself, same as YouTube/Twitch's own players -
+              this exact kind of element is what was impossible with the
+              old mpv embed and is now just ordinary positioned HTML.
+            -->
+            <button id="center-play-btn" class="center-play-btn" title="Play" style="display:none">
+              <svg viewBox="0 0 24 24" width="32" height="32"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+            </button>
+            <div class="pip-placeholder" id="pip-placeholder">
+              <svg viewBox="0 0 24 24" width="48" height="48"><rect x="2" y="4" width="20" height="16" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="12" y="11" width="8" height="6" rx="0.5" fill="currentColor"/></svg>
+              Playing in Picture in Picture
+              <!--
+                Rescue controls for a PiP window you can no longer reach.
+                The PiP is a frameless, always-on-top, skip-taskbar OS
+                window, so if the monitor it lives on gets unplugged or
+                input-switched away (e.g. another machine takes over the
+                display), there is NO OS-level affordance left to move or
+                close it - no taskbar entry, no alt-tab, no title bar.
+                These buttons act on the window by label, so they work
+                even after a main-webview reload orphaned our JS handle.
+              -->
+              <div class="pip-placeholder-actions">
+                <button id="pip-bring-btn" class="pip-placeholder-btn" title="Move the PiP window to the same screen as this window">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><rect x="2" y="4" width="20" height="16" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M15 8l-5 5M10 8h5v5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" transform="rotate(180 12.5 10.5)"/></svg>
+                  Bring PiP to this screen
+                </button>
+                <button id="pip-close-remote-btn" class="pip-placeholder-btn" title="Close the PiP window and resume playback here">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                  Close PiP
+                </button>
+              </div>
+            </div>
+            <!--
+              True overlay now (position:absolute within #video-region,
+              see CSS) rather than a separate strip of webview real estate
+              below the video - see the .controls-bar rule for why that
+              distinction used to matter and no longer does.
+            -->
+            <div id="seek-overlay" class="seek-overlay">
+              <div class="seek-spinner"></div>
+              <span id="seek-overlay-label">Seeking…</span>
+            </div>
+            <!-- Stream info overlay: channel avatar, name, title, and
+                 viewer count. Fades in alongside the controls bar on
+                 mouseover (controls-visible class on #video-frame);
+                 populated and shown by updateStreamInfoOverlay() in main.js.
+                 Starts with .empty so it stays invisible until stream data
+                 arrives. pointer-events:none keeps it non-interactive. -->
+            <div id="stream-info-overlay" class="stream-info-overlay empty">
+              <img id="stream-info-avatar" class="stream-info-avatar" src="" alt="" />
+              <div class="stream-info-text">
+                <div class="stream-info-name-row">
+                  <span id="stream-info-name"></span>
+                  <!-- Partner badge: shield shape matching Twitch's verified partner icon -->
+                  <svg id="stream-info-badge" class="stream-info-badge" viewBox="0 0 16 16" width="16" height="16" style="display:none" aria-label="Partner">
+                    <path d="M8 0.5C5.6 1.7 3.2 2.2 0.5 2.2v6.3c0 4.2 3.4 6.7 7.5 7.7 4.1-1 7.5-3.5 7.5-7.7V2.2C12.8 2.2 10.4 1.7 8 0.5z" fill="currentColor"/>
+                    <path d="M11 6.5L7 10.5L5 8.5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                  </svg>
+                </div>
+                <div id="stream-info-title" class="stream-info-title"></div>
+                <div id="stream-info-meta" class="stream-info-meta"></div>
+              </div>
+            </div>
+            <div id="controls-bar" class="controls-bar">
+              <button id="play-pause-btn" class="control-btn" title="Play/Pause">
+                <svg id="play-icon" viewBox="0 0 24 24" width="20" height="20"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                <svg id="pause-icon" viewBox="0 0 24 24" width="20" height="20" style="display:none"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg>
+              </button>
+              <div id="seek-bar-track" class="seek-bar-track">
+                <div id="seek-bar-fill" class="seek-bar-fill"></div>
+                <div id="seek-bar-muted-segments" class="seek-bar-muted-segments"></div>
+                <div id="seek-bar-thumbnail" class="seek-bar-thumbnail"></div>
+                <div id="seek-bar-tooltip" class="seek-bar-tooltip"></div>
+              </div>
+              <span id="time-display" class="time-display">live</span>
+              <button id="live-btn" class="live-btn" title="Jump to live">Live</button>
+              <button id="mute-btn" class="control-btn" title="Mute/Unmute">
+                <svg id="volume-icon" viewBox="0 0 24 24" width="18" height="18"><path d="M3 9v6h4l5 5V4L7 9H3z" fill="currentColor"/></svg>
+                <svg id="mute-icon" viewBox="0 0 24 24" width="18" height="18" style="display:none"><path d="M3 9v6h4l5 5V4L7 9H3z" fill="currentColor"/><path d="M16 9l5 5M21 9l-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </button>
+              <input id="volume-slider" class="volume-slider" type="range" min="0" max="130" value="100" />
+              <button id="theater-btn" class="control-btn theater-btn" title="Theater Mode">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none"><rect x="2" y="5" width="20" height="14" rx="1.5" stroke="currentColor" stroke-width="1.5"/></svg>
+              </button>
+              <button id="pip-btn" class="control-btn pip-btn" title="Picture in Picture">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none"><rect x="2" y="4" width="20" height="16" rx="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="12" y="11" width="8" height="6" rx="0.5" fill="currentColor"/></svg>
+              </button>
+              <button id="fullscreen-btn" class="control-btn fullscreen-btn" title="Fullscreen">
+                <svg id="fullscreen-enter-icon" viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg id="fullscreen-exit-icon" viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M9 3v3a2 2 0 0 1-2 2H4M15 3v3a2 2 0 0 0 2 2h3M9 21v-3a2 2 0 0 0-2-2H4M15 21v-3a2 2 0 0 1 2-2h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <div class="settings-wrapper">
+                <!-- Chapters button: only visible for VODs with chapter data -->
+                <button id="chapters-btn" class="control-btn chapters-btn" title="Chapters" style="display:none">
+                  <!-- Bullet-list icon representing chapter markers -->
+                  <svg viewBox="0 0 20 20" width="17" height="17" fill="currentColor">
+                    <circle cx="3" cy="4.5" r="1.5"/><rect x="6.5" y="3.5" width="10" height="2" rx="1"/>
+                    <circle cx="3" cy="10" r="1.5"/><rect x="6.5" y="9" width="10" height="2" rx="1"/>
+                    <circle cx="3" cy="15.5" r="1.5"/><rect x="6.5" y="14.5" width="10" height="2" rx="1"/>
+                  </svg>
+                </button>
+                <button id="settings-btn" class="control-btn" title="Quality settings">
+                  <svg viewBox="0 0 24 24" width="18" height="18"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!--
+          Fills the space left over below #video-frame when the window is
+          wider than the 16:9 video needs and theater mode isn't collapsing
+          the sidebar to compensate - mirrors the official site's below-
+          player channel info strip (avatar, title, Follow/Subscribe,
+          viewer count, tags) instead of leaving that area solid black.
+          Hidden via CSS whenever #app has .theater-mode (where there's no
+          leftover space to fill) or no stream is playing - see the
+          #app:not(.theater-mode) rule below and updateChannelInfoBar() in
+          main.js, which also handles the "no stream playing" half since
+          that's runtime state, not something CSS alone can know.
+        -->
+        <div id="channel-info-bar" class="channel-info-bar" style="display:none">
+          <img id="channel-info-avatar" class="channel-info-avatar" src="" alt="" />
+          <div class="channel-info-main">
+            <div class="channel-info-top-row">
+              <span id="channel-info-name" class="channel-info-name"></span>
+              <a id="channel-info-follow-btn" class="channel-info-follow-btn" href="#" target="_blank" rel="noopener noreferrer">Follow</a>
+              <a id="channel-info-subscribe-btn" class="channel-info-subscribe-btn" href="#" target="_blank" rel="noopener noreferrer">Subscribe</a>
+              <button id="channel-info-videos-btn" class="channel-info-videos-btn">Videos</button>
+              <button id="channel-info-kick-alias-btn" class="channel-info-videos-btn channel-info-kick-alias-btn" title="Set which Kick channel to fail over to when this Twitch stream ends">Link Kick</button>
+              <span id="channel-info-viewers" class="channel-info-viewers"></span>
+            </div>
+            <div id="channel-info-title" class="channel-info-title"></div>
+            <div id="channel-info-tags" class="channel-info-tags"></div>
+          </div>
+        </div>
+      </div>
+
+
+      <div id="chat-pane">
+        <!--
+          Shown only while chat is collapsed (#chat-pane.collapsed - see
+          toggleChatCollapse() in main.js). A separate element from
+          chat-collapse-toggle below rather than the same button just
+          relabeled, because the collapsed state's clickable area is the
+          ENTIRE thin strip the column shrinks down to (matching Twitch's
+          own collapsed chat rail), not just a small icon-sized button
+          floating in otherwise-empty space.
+        -->
+        <button id="chat-expand-strip" class="chat-expand-strip" title="Expand chat">
+          <svg viewBox="0 0 24 24" width="14" height="14"><path d="M15 19l-7-7 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="chat-header">
+          <div class="chat-header-left">
+            <button id="chat-collapse-toggle" class="chat-collapse-toggle" title="Collapse chat">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            Chat
+            <button id="automod-toggle-btn" class="automod-toggle-btn" style="display:none" title="AutoMod queue">
+              AutoMod <span id="automod-queue-count" class="automod-queue-count"></span>
+            </button>
+          </div>
+          <span id="chat-status" class="chat-status">connecting…</span>
+        </div>
+        <div id="automod-panel" class="automod-panel" style="display:none"></div>
+        <div class="chat-body" id="chat-messages"></div>
+        <button id="jump-to-latest-btn" class="jump-to-latest-btn">
+          <svg viewBox="0 0 24 24" width="14" height="14"><path d="M7 10l5 5 5-5z" fill="currentColor"/></svg>
+          <span id="jump-to-latest-count"></span> Chat paused due to scroll
+        </button>
+        <div class="chat-input-row" id="chat-input-row">
+          <div class="chat-input-wrapper" id="chat-input-wrapper">
+            <div id="chat-input-badge" class="chat-input-badge"></div>
+            <textarea id="chat-input" class="chat-input" rows="1" placeholder="Send a message" disabled></textarea>
+            <!--
+              Emote picker toggle: opens #emote-picker-menu (a fixed-position
+              flyout, positioned/populated in chat-emote-picker.js), the same
+              browsable-grid-of-emotes button the official Twitch site and
+              the 7TV browser extension both put here.
+            -->
+            <button id="chat-emote-btn" class="chat-emote-btn" type="button" title="Emotes" disabled>
+              <svg viewBox="0 0 24 24" width="18" height="18">
+                <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                <circle cx="8.7" cy="9.8" r="1.15" fill="currentColor"/>
+                <circle cx="15.3" cy="9.8" r="1.15" fill="currentColor"/>
+                <path d="M8 14.2c1 1.3 2.4 2 4 2s3-.7 4-2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <button id="chat-send-btn" class="chat-send-btn" disabled>Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!--
+      quality-menu lives OUTSIDE #video-column entirely, as a direct child
+      of <body>, positioned via position:fixed with coordinates computed in
+      JS from the settings button's actual on-screen location.
+
+      This used to be required to dodge mpv's native window (which painted
+      over webview content regardless of CSS z-index or DOM nesting depth);
+      now that video plays through an in-DOM <video> element, that specific
+      reason is gone, but the pattern is kept because it's still the right
+      one for a flyout menu generally - living outside any ancestor's
+      overflow:hidden/clipping and computing position from the trigger
+      button's actual on-screen rect is simpler than trying to make a
+      nested dropdown reliably escape every ancestor's stacking/clipping
+      context.
+    -->
+    <div id="quality-menu" class="quality-menu"></div>
+
+    <!-- Sign-out dropdown anchored below the username button when logged in. -->
+    <div id="user-menu" class="user-menu">
+      <button id="user-menu-signout" class="user-menu-item destructive">Sign out</button>
+    </div>
+
+    <!-- Kick equivalent of #user-menu: same pattern, so clicking the Kick
+         username opens a dropdown with an explicit Sign out rather than
+         logging out on a single click. -->
+    <div id="kick-user-menu" class="user-menu">
+      <button id="kick-user-menu-signout" class="user-menu-item destructive">Sign out</button>
+    </div>
+
+    <!-- VOD chapters panel: fixed-position, opens above the chapters button. -->
+    <div id="chapters-menu" class="chapters-menu"></div>
+
+    <!--
+      Emote picker: fixed-position flyout above the chat composer, opened
+      via #chat-emote-btn. Same positioning pattern as #quality-menu above
+      (JS computes top/left/width from the composer's own bounding rect in
+      chat-emote-picker.js) so it's never clipped by the chat pane's own
+      overflow/scroll container.
+    -->
+    <div id="emote-picker-menu" class="emote-picker-menu"></div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

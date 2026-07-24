@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<!-- pip.html — the native always-on-top Picture-in-Picture window.
+
+     Exists because neither Document PiP nor classic video PiP is
+     actually implemented in WebView2 (both APIs are exposed, both fail
+     at runtime - see togglePip in playback-controls.js), so on Windows
+     the only way to get a floating mini-player is a real OS window.
+     Created by enterNativePip() in playback-controls.js with all
+     playback state passed via query params; plays its OWN copy of the
+     stream (the Rust relay is a multi-subscriber broadcast, so live PiP
+     shares the single streamlink pipeline; VODs point hls.js at the
+     same CDN URL). Frameless: the video is the drag region. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>PiP</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body class="pip-body">
+    <div class="pip-stage" data-tauri-drag-region>
+      <!-- The drag region is the stage, not the video: pointer-events
+           on the video are disabled in CSS so every un-buttoned pixel
+           drags the window, which is how OS PiP windows behave. -->
+      <video id="pip-video" autoplay playsinline></video>
+      <button class="pip-close docpip-btn" id="pip-close" title="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z" fill="currentColor"/></svg>
+      </button>
+      <div class="docpip-controls pip-controls">
+        <button class="docpip-btn" data-act="playpause" title="Play/Pause">
+          <svg class="docpip-pause-icon" viewBox="0 0 24 24" width="16" height="16"><path d="M6 4h4v16H6zM14 4h4v16h-4z" fill="currentColor"/></svg>
+          <svg class="docpip-play-icon" viewBox="0 0 24 24" width="16" height="16" style="display:none"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+        </button>
+        <button class="docpip-btn" data-act="mute" title="Mute/Unmute">
+          <svg class="docpip-vol-icon" viewBox="0 0 24 24" width="16" height="16"><path d="M3 9v6h4l5 5V4L7 9H3z" fill="currentColor"/></svg>
+          <svg class="docpip-muted-icon" viewBox="0 0 24 24" width="16" height="16" style="display:none"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3 3.5 3.5-1.4 1.4-3.5-3.5-3.5 3.5-1.4-1.4 3.5-3.5-3.5-3.5 1.4-1.4 3.5 3.5 3.5-3.5 1.4 1.4L16.5 12z" fill="currentColor"/></svg>
+        </button>
+        <input class="docpip-volume" data-act="volume" type="range" min="0" max="1" step="0.02" />
+        <!-- Live volume readout: follows the pointer on hover (showing
+             the % that position maps to) and the thumb while dragging.
+             A native title tooltip can't do either - it neither updates
+             while visible nor shows during a drag at all. -->
+        <div class="pip-vol-bubble" id="pip-vol-bubble"></div>
+      </div>
+    </div>
+    <script type="module" src="/src/pip.js"></script>
+  </body>
+</html>

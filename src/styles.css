@@ -1,0 +1,3965 @@
+/* styles.css — the app's entire stylesheet, moved out of index.html.
+ *
+ * Was a 3,300-line <style> block inline in index.html, which made the
+ * markup file the largest thing in the repo and CSS changes impossible
+ * to review separately from markup ones. Referenced from index.html via
+ * a plain <link>, which Vite resolves and bundles at build time the
+ * same as the inline block was. Content otherwise unchanged in the
+ * move - including the ordering, which matters at least once (see the
+ * cascade-ordering comment near the top, preserved below). */
+
+/* ── Platform accent variables ────────────────────────────────────────
+   Every Twitch-purple accent below goes through these variables so the
+   whole chrome can recolor when the platform toggle flips. Default =
+   Twitch purple; body.kick-mode (set by applyPlatformUi in main.js)
+   swaps the set to Kick green. Twitch-only widgets that never render in
+   Kick mode (channel-point redeems, the Twitch login button) keep their
+   literal purples - they're hidden then anyway. */
+:root {
+  --accent: #9147ff;        /* Twitch brand purple */
+  --accent-dark: #772ce8;   /* hover/pressed variant */
+  --accent-light: #a970ff;
+  --accent-text: #bf94ff;   /* accent-tinted text on dark bg */
+  --accent-soft: #9147ff22; /* translucent accent fill */
+  --accent-fg: #fff;        /* text ON accent-filled surfaces */
+}
+body.kick-mode {
+  --accent: #53fc18;        /* Kick brand green */
+  --accent-dark: #45d514;
+  --accent-light: #7dff53;
+  --accent-text: #8bff66;
+  --accent-soft: #53fc1822;
+  --accent-fg: #0e0e10;     /* Kick uses dark text on its green */
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+html, body {
+  width: 100%;
+  height: 100%;
+  background: #0e0e10;
+  color: #efeff1;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  overflow: hidden;
+}
+#app {
+  /* Sidebar/chat column widths as custom properties rather than
+     hardcoded directly in grid-template-columns, so theater-mode
+     (collapses the sidebar) and chat-collapsed (collapses chat)
+     can each override just their own variable independently and
+     still combine correctly if both are active at once - Twitch's
+     own site allows theater mode + collapsed chat together, and
+     with these fully spelled out as separate class rules instead
+     (e.g. one rule for theater-mode, a second for chat-collapsed,
+     both setting the whole grid-template-columns string) the one
+     that happened to be defined later in the stylesheet would
+     always win outright over the other instead of both applying. */
+  --sidebar-width: 240px;
+  --chat-width: 320px;
+  --header-height: 56px;
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr var(--chat-width);
+  grid-template-rows: var(--header-height) 1fr;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  /* Smoothly collapse a sidebar/chat column or the header row
+     rather than snapping, since grid-template-columns/-rows are
+     themselves animatable properties in Chromium/WebView2. */
+  transition: grid-template-columns 0.2s ease, grid-template-rows 0.2s ease, padding-top 0.2s ease;
+}
+/* Theater mode: entered automatically once playback starts (see
+   watchChannel() in main.js), exited on Stop. Only collapses the
+   channels sidebar - chat stays, matching the official site's
+   theater mode, which also keeps chat visible and only hides the
+   left nav. The column is collapsed to 0 (not the element just
+   display:none'd) so the grid actually reflows and #video-column
+   gets the freed-up width. */
+#app.theater-mode {
+  --sidebar-width: 0px;
+}
+#app.theater-mode #channels-sidebar {
+  /* Avoid a 1px sliver of content/border peeking out while the
+     column transitions toward 0 width. */
+  overflow: hidden;
+  border-right: none;
+}
+/* Chat collapse: manual only (toggleChatCollapse() in main.js, via
+   #chat-collapse-toggle/#chat-expand-strip), unlike theater mode
+   which also has automatic triggers. Shrinks to a fixed width
+   narrow enough to read as "just a collapsed rail" but wide enough
+   to comfortably hold #chat-expand-strip's arrow button (which is
+   the only thing visible in the column at this width - see
+   #chat-pane.collapsed below) - 0 outright would work layout-wise
+   the same way --sidebar-width:0px does for theater mode, but
+   there'd be nothing left in the column to click to expand it
+   again, unlike the sidebar which has its own separate always-
+   visible nav-tabs row to fall back on. */
+#app.chat-collapsed {
+  --chat-width: 36px;
+}
+/* Top bar collapse: independent of both of the above, and uses a
+   GRID ROW instead of a column - #header-collapse-toggle (a sibling
+   of <header>, not inside it) is what stays reachable to expand it
+   again, same role #chat-expand-strip plays for chat.
+   This can safely go to a bare 0px (unlike --chat-width's 36px,
+   which needs to stay nonzero so #chat-expand-strip has room to
+   render) because #header-collapse-toggle is itself a fixed-
+   position element layered via normal z-index, not something that
+   could get covered by a separately-painted native window the way
+   it could have been when video played through mpv. */
+#app.header-collapsed {
+  --header-height: 0px;
+}
+#app.header-collapsed {
+  /* When the header row collapses to 0px, the .header-collapse-toggle
+     strip (position:fixed; top:0; height:14px; background:#18181b) sits
+     as a solid 14px bar over whatever is at the top of row 2 - the
+     drops banner and chat header. Nudging the grid down by exactly that
+     14px means row 2 content starts right below the strip instead of
+     behind it. Not needed in fullscreen because the toggle is
+     display:none there anyway. */
+  padding-top: 14px;
+}
+#app.header-collapsed.app-fullscreen {
+  padding-top: 0;
+}
+#app.header-collapsed header {
+  /* visibility:hidden (not just overflow:hidden) so header's
+     content - including the channel-name input and Watch/Stop
+     buttons - isn't still focusable/tabbable while squeezed into
+     the reserved 14px strip. overflow:hidden alone prevents visible
+     spillover but leaves the squished content interactive, which
+     would be a confusing way to still reach those controls. */
+  visibility: hidden;
+  overflow: hidden;
+  border-bottom: none;
+}
+/* Fullscreen: collapse all three grid dimensions to zero so the
+   video fills the entire OS window. Unlike theater mode (sidebar
+   only) or chat-collapsed/header-collapsed (one dimension each),
+   this hides everything at once. The .header-collapse-toggle strip
+   is position:fixed so it sits above the grid and needs its own
+   display:none; everything else is handled by the CSS variable
+   overrides + visibility:hidden on the affected grid cells. */
+#app.app-fullscreen {
+  --sidebar-width: 0px;
+  --chat-width: 0px;
+  --header-height: 0px;
+}
+#app.app-fullscreen header,
+#app.app-fullscreen #channels-sidebar,
+#app.app-fullscreen #chat-pane {
+  visibility: hidden;
+  overflow: hidden;
+  border: none;
+}
+#app.app-fullscreen .header-collapse-toggle {
+  display: none;
+}
+#app.app-fullscreen #channel-info-bar {
+  display: none !important;
+}
+/* In fullscreen, #video-frame expands to fill the screen height (the
+   sidebar/chat/header collapsing to 0 width via the CSS variable
+   overrides above is what frees up the space). #video-region's
+   16:9 box centers within that via #video-column's existing
+   centering, same as the non-fullscreen case - no separate
+   controls-bar carve-out needed since it's an absolute overlay
+   inside #video-region now, not a sibling strip taking up its own
+   layout space below the video. */
+#app.app-fullscreen #video-frame {
+  position: relative;
+  height: 100%;
+}
+/* Grid rows have the same implicit min-height:auto issue flex items
+   do - without this, row 2 (1fr) can grow past the available space
+   to fit its tallest child's content, instead of clipping it. This
+   is a second line of defense on top of the #chat-pane/.chat-body
+   fixes below, in case anything else inside the grid ever has the
+   same problem. */
+#channels-sidebar,
+#video-column,
+#chat-pane {
+  min-height: 0;
+}
+header {
+  grid-column: 1 / 4;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  background: #18181b;
+  border-bottom: 1px solid #2c2c30;
+}
+/* Pinned top-left regardless of header's own collapsed state (see
+   #app.header-collapsed above) - this button is what brings the
+   header back, so it can never be inside the element it controls.
+   Rotates 180deg when collapsed (arrow points down -> up) as the
+   only visual indicator of state, since there's no header text
+   label like chat's "Collapse"/expand-strip pairing has room for
+   at this size. */
+.header-collapse-toggle {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: #6d6d72;
+  cursor: pointer;
+  z-index: 10000;
+  padding: 0;
+}
+.header-collapse-toggle:hover {
+  color: #efeff1;
+  background: rgba(255, 255, 255, 0.08);
+}
+#app.header-collapsed .header-collapse-toggle {
+  height: 14px;
+  background: #18181b;
+  border-bottom: 1px solid #2c2c30;
+}
+#app.header-collapsed .header-collapse-toggle svg {
+  transform: rotate(180deg);
+}
+/* The launcher: input + Watch/Stop as ONE attached control (shared
+   border line, outer corners rounded, inner seam square) - the field
+   and its verb read as a single object instead of two strays. */
+.channel-launcher {
+  display: flex;
+  align-items: stretch;
+  position: relative;
+}
+/* Live indicator while a stream is up: a small dot inside the input
+   itself - the one place your eye already goes to see WHAT is playing.
+   Replaces the old "Playing: x" pill, which restated both the input's
+   text and the Stop button's existence. */
+.channel-launcher.playing input { padding-left: 27px; }
+.channel-launcher.playing::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #eb0400;
+  z-index: 1;
+  pointer-events: none;
+  animation: launcher-live-pulse 2.4s ease-out infinite;
+}
+@keyframes launcher-live-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(235, 4, 0, 0.45); }
+  60%  { box-shadow: 0 0 0 5px rgba(235, 4, 0, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(235, 4, 0, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .channel-launcher.playing::before { animation: none; }
+}
+header input {
+  background: #0e0e10;
+  border: 1px solid #3a3a3d;
+  border-right: none;
+  color: #efeff1;
+  padding: 6px 10px;
+  border-radius: 4px 0 0 4px;
+  font-size: 14px;
+  width: 220px;
+  height: 34px;
+  box-sizing: border-box;
+}
+header input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+header .channel-launcher #watch-btn {
+  border-radius: 0 4px 4px 0;
+  height: 34px;
+  box-sizing: border-box;
+}
+header button {
+  background: var(--accent);
+  border: none;
+  color: white;
+  padding: 7px 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+}
+header button:hover {
+  background: var(--accent-dark);
+}
+header #login-btn {
+  background: transparent;
+  border: 1px solid #3a3a3d;
+  color: #efeff1;
+}
+header #login-btn:hover {
+  background: #2c2c30;
+}
+header #login-btn.logged-in {
+  border-color: var(--accent);
+  color: #efeff1;
+  background: rgba(145, 71, 255, 0.12);
+  cursor: pointer;
+}
+header #login-btn.logged-in:hover {
+  background: rgba(145, 71, 255, 0.22);
+  border-color: var(--accent-text);
+}
+/* Sign-out dropdown that appears below the username button.
+   Same fixed-position/JS-positioned pattern as .quality-menu. */
+.user-menu {
+  position: fixed;
+  display: none;
+  flex-direction: column;
+  background: #18181b;
+  border: 1px solid #3a3a3d;
+  border-radius: 6px;
+  padding: 4px;
+  min-width: 130px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+}
+.user-menu.open {
+  display: flex;
+}
+.user-menu-item {
+  background: none;
+  border: none;
+  color: #efeff1;
+  font-size: 13px;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  width: 100%;
+}
+.user-menu-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.user-menu-item.destructive:hover {
+  color: #eb4034;
+  background: rgba(235, 64, 52, 0.1);
+}
+/* VOD chapters panel */
+.chapters-menu {
+  position: fixed;
+  display: none;
+  flex-direction: column;
+  background: #18181b;
+  border: 1px solid #3a3a3d;
+  border-radius: 6px;
+  padding: 4px;
+  min-width: 220px;
+  max-height: 280px;
+  overflow-y: auto;
+  box-shadow: 0 -4px 16px rgba(0,0,0,0.5);
+  z-index: 1000;
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a3d transparent;
+}
+.chapters-menu.open { display: flex; }
+.chapters-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  background: none;
+  border: none;
+  color: #adadb8;
+  font-size: 13px;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  width: 100%;
+  white-space: nowrap;
+}
+.chapters-item:hover {
+  background: rgba(255,255,255,0.08);
+  color: #efeff1;
+}
+.chapters-item.active {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.chapters-item.active .chapters-item-time { color: var(--accent-text); }
+.chapters-item-time {
+  color: #6d6d72;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.chapters-item-title { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+/* Quiet pill beside the launcher; gone entirely when there's nothing
+   to say, red-dotted while a stream is playing. */
+header .status {
+  font-size: 12px;
+  color: #adadb8;
+  background: #0e0e10;
+  border: 1px solid #2c2c30;
+  border-radius: 999px;
+  padding: 4px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 340px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+header .status:empty { display: none; }
+/* Account control anchors the right edge; chip-shaped so it reads as
+   identity, not as an action next to Watch. */
+header #login-btn { margin-left: auto; border-radius: 999px; padding: 6px 14px; }
+header #login-btn.logged-in { border-radius: 999px; }
+.nav-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+}
+.nav-tab {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: #adadb8;
+  padding: 8px 4px;
+  cursor: pointer;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+}
+.nav-tab:hover {
+  color: #efeff1;
+}
+.nav-tab-active {
+  color: #efeff1;
+  border-bottom-color: var(--accent);
+}
+.nav-tab-active:hover {
+  color: #efeff1;
+}
+/* "Now watching: <channel>" pill - see the HTML comment on
+   #back-to-stream-btn for why this exists. Styled as a filled pill
+   (not another flat nav-tab) so it reads as a distinct "jump back"
+   action rather than a third sibling tab. */
+.back-to-stream-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+  padding: 6px 12px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  max-width: 220px;
+}
+.back-to-stream-btn:hover {
+  background: var(--accent-dark);
+}
+.back-to-stream-btn svg {
+  flex-shrink: 0;
+}
+#back-to-stream-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+  #video-column is the actual grid cell (full available height/width
+  in column 1). #video-region lives inside it but is constrained to
+  16:9 - without this, mpv (which preserves the source video's
+  aspect ratio by default) ends up letterboxing inside whatever
+  oddly-shaped rect the unconstrained grid cell happened to be,
+  producing large black bars above/below the actual video content.
+  Any leftover vertical space below the 16:9 box is intentionally
+  left empty for now (e.g. future playback controls).
+*/
+#video-column {
+  grid-column: 2;
+  grid-row: 2;
+  background: #000;
+  min-height: 0;
+  /* Same class of bug as #chat-pane/#channels-sidebar's min-height:0
+     below, just on the other axis. Grid items default to
+     min-width:auto, which factors in their content's preferred
+     size - and #video-region's aspect-ratio:16/9 box computes a
+     width from whatever height row 2 happens to have, completely
+     independent of this column's actual 1fr share. In short/squat
+     windows (tall relative to wide - e.g. a non-maximized 1100x700
+     window), that height-driven width can exceed the entire window,
+     which inflated this "auto" min-width past the 1fr track's fair
+     share, pushed the grid wider than #app, and (since #app clips
+     overflow) shoved #chat-pane's fixed 320px column off the right
+     edge entirely - the "chat disappears in a smaller window" bug.
+     min-width:0 lets this column actually shrink to its 1fr share
+     instead of demanding room for the unconstrained aspect-ratio
+     box; #video-frame/#video-region below still fit inside via
+     max-height:100%/width:100% either way. */
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center; /* horizontally center the 16:9 box */
+  position: relative;
+}
+/* #video-frame groups the drops banner with the video itself so they
+   behave as one unit within the flex column (centered as a whole,
+   capped by available height as a whole). The controls bar now
+   lives inside #video-region as an absolute overlay (see
+   .controls-bar below), not as a flex child here. */
+#video-frame {
+  width: 100%;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  /* Belt-and-suspenders alongside #video-column's min-width:0 above:
+     flex-shrink:0 only stops *flex* shrinking, but #video-frame is
+     also the thing whose aspect-ratio child drives #video-column's
+     min-content width in the first place. min-width:0 here too
+     ensures it never refuses to render narrower than that
+     unconstrained preferred width once the column itself is
+     correctly capped to its 1fr share. */
+  min-width: 0;
+}
+#video-region {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  position: relative;
+  overflow: hidden;
+}
+/* The actual decoded stream (see playback-controls.js's hls.js
+   setup). object-fit:contain matches mpv's old default behavior of
+   preserving source aspect ratio with letterboxing rather than
+   cropping/stretching to fill the 16:9 box exactly. */
+#video-element {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  display: block;
+}
+/* Center play/pause button - a genuine overlay sitting on top of
+   #video-element, shown only while paused (see togglePause's
+   icon-swap logic in playback-controls.js). This kind of overlay
+   is exactly what wasn't possible with the old native-window-backed
+   player: any HTML positioned here would have been painted over by
+   mpv's own HWND regardless of z-index. */
+.center-play-btn {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  border: none;
+  color: #efeff1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 2;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.center-play-btn:hover {
+  background: rgba(0, 0, 0, 0.75);
+  transform: translate(-50%, -50%) scale(1.06);
+}
+#video-region .placeholder {
+  position: absolute;
+  inset: 0;
+  display: none; /* shown explicitly by main.js only while no stream
+                     is active (idle/stopped) - see watchChannel() and
+                     the Stop handler. Defaulting to visible here
+                     caused it to sit on top of the home feed at
+                     startup and after Stop, since nothing else ever
+                     hid it for the "just looking at the home feed,
+                     nothing happening" case. */
+  align-items: center;
+  justify-content: center;
+  color: #555;
+  font-size: 13px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/*
+  Drops banner. Sits ABOVE #video-region as its own flex item in
+  #video-frame's column - not an absolutely-positioned overlay - for
+  the same reason the controls-bar further down needs real space of
+  its own rather than relying on z-index (see that rule's comment).
+  toggled by main.js's updateDropsBanner().
+*/
+.drops-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: #2e1a52;
+  border-bottom: 1px solid var(--accent);
+  color: #efeff1;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.drops-banner-icon {
+  color: var(--accent-text);
+  flex-shrink: 0;
+}
+.drops-banner-text {
+  flex: 1;
+  line-height: 1.4;
+}
+.drops-banner-text a {
+  color: var(--accent-text);
+  font-weight: 600;
+  text-decoration: none;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+.drops-banner-text a:hover {
+  text-decoration: underline;
+}
+/* Small muted pill for the live viewer count, e.g. "1.2K watching" -
+   kept visually secondary to the link (lighter weight, parens-free
+   pill style) since the link is the actual call to action and the
+   count is just supporting context. Populated by
+   updateDropsBanner() in main.js. */
+.drops-banner-viewers {
+  margin-left: 6px;
+  color: var(--accent-text);
+  font-weight: 400;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+.drops-banner-dismiss {
+  background: none;
+  border: none;
+  color: #adadb8;
+  padding: 2px;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+}
+.drops-banner-dismiss:hover {
+  color: #efeff1;
+}
+
+/*
+  App-wide alert for missing streamlink/ffmpeg, shown on startup if
+  either isn't found on PATH (see check_stream_deps() in
+  deps_check.rs). Lives as a sibling of #app, not a child of it -
+  #app's CSS grid has a fixed 2-row template (see #app's own
+  comment on grid-template-rows), so a genuine grid child here
+  would need its own dedicated row just for a banner that's
+  usually hidden entirely. position:fixed sidesteps the grid
+  altogether, same reasoning as #quality-menu's own placement
+  comment further down. #app.deps-banner-visible's padding-top
+  (added by JS alongside showing this) is what actually makes room
+  for it instead of letting it overlay/cover the header - the two
+  heights below (38px) must stay equal for that to line up exactly.
+*/
+.deps-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  background: #4a1f1f;
+  border-bottom: 1px solid #f04747;
+  color: #efeff1;
+  font-size: 13px;
+}
+#app.deps-banner-visible {
+  padding-top: 38px;
+}
+.deps-banner-icon {
+  color: #ff6b6b;
+  flex-shrink: 0;
+}
+.deps-banner-text {
+  flex: 1;
+  line-height: 1.4;
+}
+.deps-banner-install-btn {
+  background: var(--accent);
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.deps-banner-install-btn:hover {
+  background: #7c2fe0;
+}
+.deps-banner-install-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.deps-banner-dismiss {
+  background: none;
+  border: none;
+  color: #efb9b9;
+  padding: 2px;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+}
+.deps-banner-dismiss:hover {
+  color: #efeff1;
+}
+
+/*
+  Fills the leftover space below #video-frame (see the HTML comment
+  on #channel-info-bar for the full why). Only ever shown while NOT
+  in theater mode - in theater mode #video-frame already grows to
+  use the full available height with nothing left over below it, so
+  there's no gap to fill and showing this would just push the video
+  shorter than it needs to be for no reason. The "is a stream
+  actually playing" half of the visibility logic is handled in JS
+  (updateChannelInfoBar() in main.js), since that's runtime state
+  this rule alone can't know.
+*/
+#app.theater-mode #channel-info-bar {
+  display: none !important;
+}
+.channel-info-bar {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  border-top: 1px solid #2c2c30;
+  overflow: hidden;
+}
+.channel-info-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+  background: #2c2c30;
+}
+.channel-info-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.channel-info-top-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.channel-info-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: #efeff1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Both Follow and Subscribe link out to the real channel page rather
+   than acting in-app - this app's OAuth login only ever requests
+   chat/read-follows scopes (see oauth.rs), not the write-scoped
+   user:edit:follows or subscription permissions actually needed to
+   follow/subscribe on someone's behalf, so a button that looked
+   like it performed those actions in-app would be lying about what
+   this app can do. Opened via the opener plugin like the drops
+   banner's link, not a plain target="_blank", since that does
+   nothing inside a Tauri webview - see openUrl() usage in main.js. */
+.channel-info-follow-btn,
+.channel-info-subscribe-btn {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 14px;
+  border-radius: 4px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.channel-info-follow-btn {
+  background: var(--accent);
+  color: white;
+}
+.channel-info-follow-btn:hover {
+  background: var(--accent-dark);
+}
+.channel-info-subscribe-btn {
+  background: transparent;
+  color: #efeff1;
+  border: 1px solid #555;
+}
+.channel-info-subscribe-btn:hover {
+  border-color: #adadb8;
+}
+.channel-info-videos-btn {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  color: #efeff1;
+  border: 1px solid #555;
+  font-family: inherit;
+}
+.channel-info-videos-btn:hover {
+  border-color: #adadb8;
+  background: rgba(255,255,255,0.05);
+}
+.channel-info-viewers {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #eb0400;
+  white-space: nowrap;
+}
+.channel-info-title {
+  font-size: 14px;
+  color: #efeff1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.channel-info-tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+.channel-info-tag {
+  font-size: 11px;
+  color: #efeff1;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 1px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.channel-info-tag.channel-info-drops-tag {
+  background: var(--accent);
+  font-weight: 700;
+}
+
+/*
+  Custom playback control bar - now a genuine overlay sitting directly
+  on top of #video-element (position:absolute within #video-region),
+  the same way YouTube/Twitch's own web players do it. Previously
+  this had to be its own empty strip of webview space below the
+  video, because mpv's native window always painted over webview
+  content regardless of CSS z-index - main.js sized mpv's actual
+  window shorter than #video-region to leave room for it. None of
+  that's needed anymore: #video-element is a normal DOM element, so
+  z-index now means exactly what it always means.
+*/
+.controls-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  /* A gradient instead of a flat fill, since this now sits directly
+     on top of video content rather than on its own solid strip -
+     a hard-edged flat bar reads like a separate panel was glued on;
+     a fade reads like part of the same surface, matching how every
+     major web video player treats an in-video control bar. */
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0));
+  flex-shrink: 0;
+  z-index: 3;
+}
+/* Auto-hide controlled by JS adding/removing .controls-visible on
+   #video-frame (the parent of both the video and this bar) on mouse
+   move/leave - see showControls()/hideControls() in
+   playback-controls.js (shows on move, hides again after a 2s
+   timer). Fully invisible (not just dimmed) when not hovering/idle,
+   and pointer-events:none so the controls can't be clicked mid-
+   fade or while invisible. */
+#video-frame:not(.controls-visible) .controls-bar {
+  opacity: 0;
+  pointer-events: none;
+}
+#video-frame.controls-visible .controls-bar {
+  opacity: 1;
+}
+.controls-bar {
+  transition: opacity 0.2s ease;
+}
+/* Same idle signal as the controls fade above (controls-visible on
+   #video-frame) - once the mouse has been idle long enough for the
+   controls to fade out, the cursor hides too, matching the same 2s
+   timer with no separate JS logic needed. Scoped to #video-frame
+   itself (not a descendant selector) so it only affects the cursor
+   while over the player, not e.g. the chat panel beside it. */
+#video-frame:not(.controls-visible) {
+  cursor: none;
+}
+.vod-chapters-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: #adadb8;
+  font-weight: 500;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.vod-chapters-badge:hover { background: rgba(255,255,255,0.08); color: #efeff1; }
+.vod-chapters-popup {
+  position: fixed;
+  z-index: 2000;
+  background: #18181b;
+  border: 1px solid #3a3a3d;
+  border-radius: 6px;
+  padding: 4px;
+  min-width: 200px;
+  max-height: 260px;
+  overflow-y: auto;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a3d transparent;
+}
+.vod-chapters-popup-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: #adadb8;
+  font-size: 13px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.vod-chapters-popup-item:hover { background: rgba(255,255,255,0.08); color: #efeff1; }
+.vod-chapters-popup-time {
+  color: #6d6d72;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.vod-chapters-popup-title { overflow: hidden; text-overflow: ellipsis; }
+/* Brief loading spinner shown over the video while hls.js
+   restarts for a VOD seek. Shown/hidden via JS. */
+.seek-overlay {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #efeff1;
+  font-size: 14px;
+  z-index: 5;
+  pointer-events: none;
+}
+.seek-overlay.visible { display: flex; }
+.seek-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(255,255,255,0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+/* No background box — text-shadows keep it legible
+   over any video content. Fades with the controls bar. */
+.stream-info-overlay {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 2;
+}
+#video-frame.controls-visible .stream-info-overlay:not(.empty) {
+  opacity: 1;
+}
+.stream-info-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  /* Soft drop shadow so the avatar reads clearly on any video frame. */
+  filter: drop-shadow(0 1px 4px rgba(0,0,0,0.7));
+}
+.stream-info-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  /* Top-align text with the avatar */
+  padding-top: 2px;
+}
+.stream-info-name-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.6);
+}
+.stream-info-badge {
+  flex-shrink: 0;
+  color: var(--accent-light);
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.7));
+}
+.stream-info-title {
+  font-size: 13px;
+  font-weight: 400;
+  color: #efeff1;
+  line-height: 1.35;
+  /* No line-clamp: show the full title however long it is.
+     max-width keeps it from spanning the whole video width. */
+  white-space: normal;
+  overflow-wrap: break-word;
+  max-width: 300px;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.6);
+}
+.stream-info-meta {
+  font-size: 12.5px;
+  color: #c8c8d4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.6);
+}
+.control-btn {
+  background: none;
+  border: none;
+  color: #efeff1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.control-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+.control-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.control-btn:disabled:hover {
+  background: none;
+}
+.seek-bar-track {
+  flex: 1;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 2px;
+  position: relative;
+  cursor: pointer;
+  min-width: 0;
+  /* Invisible padding above/below the visible 4px bar widens the
+     actual mouse-hoverable/clickable area without changing how it
+     looks - makes the seek bar much easier to target precisely. */
+  margin: 8px 0;
+}
+.seek-bar-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -8px;
+  bottom: -8px;
+}
+.seek-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 2px;
+}
+/* Twitch's own player marks copyright-muted VOD ranges as a red band
+   on the seek bar - matching that convention since it's a symbol
+   viewers already recognize. Sits in its own layer above seek-bar-
+   fill (not blended into it) so the marker stays visible whether
+   that range has already been watched (under the purple fill) or
+   not (still on the plain gray track) - a translucent color reads
+   through either background rather than only showing up on one. */
+.seek-bar-muted-segments {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.seek-bar-muted-segment {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  min-width: 2px; /* stay visible even for a short mute on a long VOD */
+  background: rgba(237, 66, 69, 0.65);
+}
+.seek-bar-tooltip {
+  position: absolute;
+  bottom: 14px;
+  transform: translateX(-50%);
+  background: #18181b;
+  border: 1px solid #3a3a3d;
+  color: #efeff1;
+  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.seek-bar-tooltip.visible {
+  opacity: 1;
+}
+/* VOD-only (see _fetchStoryboard/_storyboard in playback-
+   controls.js) - a single cropped frame from Twitch's own
+   storyboard sprite sheet, shown above the existing time tooltip.
+   width/height/background-position are set inline per-hover from
+   the actual sprite's frame dimensions, since those vary by VOD -
+   only the static positioning/chrome lives here. image-rendering:
+   pixelated keeps the crop crisp rather than blurring it, since
+   sprite frames are already at their final small display size. */
+.seek-bar-thumbnail {
+  position: absolute;
+  bottom: 42px;
+  transform: translateX(-50%);
+  background-repeat: no-repeat;
+  border: 2px solid #18181b;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+  image-rendering: pixelated;
+}
+.seek-bar-thumbnail.visible {
+  opacity: 1;
+}
+.time-display {
+  font-size: 11px;
+  color: #adadb8;
+  flex-shrink: 0;
+  min-width: 28px;
+  text-align: center;
+}
+.live-btn {
+  background: none;
+  border: 1px solid #3a3a3d;
+  color: #adadb8;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.live-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+/* When at the live edge, the dot reads as "actively live" (red,
+   filled); otherwise it's neutral, indicating clicking will jump
+   forward to live from a seeked-back position. */
+.live-btn::before {
+  content: "●";
+  color: #555;
+  margin-right: 5px;
+  font-size: 9px;
+}
+.live-btn.at-live-edge::before {
+  color: #eb0400;
+}
+.live-btn.at-live-edge {
+  color: #efeff1;
+  border-color: #eb0400;
+}
+.volume-slider {
+  width: 70px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.settings-wrapper {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+}
+/*
+  Horizontal flyout: opens leftward from the settings button, at the
+  SAME vertical height as the controls bar itself, rather than above
+  or below it. This sidesteps the up/down space problem entirely -
+  the controls bar always has horizontal width to spare, whereas
+  vertical space above/below it depends on window size/maximized
+  state and can run out in either direction.
+
+  Still position:fixed with JS-computed coordinates (this element is
+  a direct child of <body>, not nested in #video-column - see the
+  HTML comment near its markup), but now JS only needs to set
+  `top` (vertically centered on the button) and `right` (anchored to
+  the button's left edge, extending further left as items are
+  added) instead of choosing between an above/below direction.
+*/
+/* ── Bits / Cheermotes ─────────────────────────────────────── */
+/* Inline bit count next to the cheermote image */
+.bits-amount {
+  font-weight: 700;
+  font-size: 0.82em;
+  margin: 0 2px 0 1px;
+  vertical-align: middle;
+}
+/* Total bits badge appended after the message */
+.bits-total-badge {
+  display: inline-block;
+  background: rgba(145, 71, 255, 0.18);
+  color: var(--accent-text);
+  font-size: 0.72em;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 5px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* ── Mention Highlights ─────────────────────────────────────── */
+.chat-line.is-mention {
+  background: rgba(255, 40, 40, 0.14);
+  border-left: 2px solid rgba(255, 60, 60, 0.8);
+  padding-left: 5px;
+  margin-left: -5px;
+}
+
+/* ── Reply Threading ─────────────────────────────────────────── */
+.chat-line.is-reply {
+  padding-top: 2px;
+}
+.reply-header {
+  font-size: 0.78em;
+  color: var(--color-text-muted, #888);
+  margin-bottom: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  padding-left: 1px;
+}
+
+/* ── Channel Point Messages (IRC custom-reward-id tag) ──────── */
+.chat-line.is-channel-point-message {
+  background: rgba(145, 71, 255, 0.07);
+  border-left: 2px solid rgba(145, 71, 255, 0.6);
+  padding-left: 5px;
+  margin-left: -5px;
+}
+
+/* ── First-Time Chatter Highlight (IRC first-msg tag) ─────────
+   Matches twitch.tv's own purple highlight for a user's first-ever
+   message in a channel - distinct from (and a stronger tint than)
+   the channel-point-message treatment above, which uses the same
+   brand purple at a much lower opacity and no label row, so the
+   two don't read as the same thing at a glance if they ever
+   overlap (a first-time chatter's first message redeeming a
+   channel point reward, however unlikely, gets both classes). */
+.chat-line.is-first-msg {
+  background: rgba(145, 71, 255, 0.15);
+  border-left: 2px solid #9146ff;
+  padding-left: 5px;
+  margin-left: -5px;
+  padding-top: 2px;
+}
+.first-msg-label {
+  font-size: 0.78em;
+  font-weight: 600;
+  color: var(--accent-text);
+  margin-bottom: 1px;
+}
+/* SVG gem icon - rendered via ::before so no extra element needed */
+.channel-point-gem {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 3px;
+  vertical-align: middle;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%239147ff' d='M4 2h8l2 4-6 8-6-8z'/%3E%3C/svg%3E") no-repeat center/contain;
+  opacity: 0.85;
+}
+
+/* ── Channel Point Redemption Events (EventSub) ─────────────── */
+.chat-line.channel-point-redeem-event {
+  background: rgba(145, 71, 255, 0.1);
+  border: 1px solid rgba(145, 71, 255, 0.25);
+  border-radius: 4px;
+  padding: 5px 8px;
+  margin: 3px 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.channel-point-redeem-event .channel-point-gem {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.redeem-info {
+  font-size: 0.85em;
+  line-height: 1.4;
+}
+.redeem-username {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.redeem-title {
+  color: #efeff1;
+  font-weight: 500;
+}
+.redeem-cost {
+  color: #adadb8;
+  font-size: 0.9em;
+}
+.redeem-user-input {
+  color: #dedee3;
+  margin-top: 2px;
+  font-style: italic;
+}
+
+.pip-btn.pip-active svg rect:last-child {
+  fill: var(--accent);
+}
+.pip-btn.pip-active svg rect:first-child {
+  stroke: var(--accent);
+}
+.theater-btn.theater-active svg rect {
+  stroke: var(--accent);
+  fill: var(--accent-soft);
+}
+/* Fullscreen button: exit icon hidden by default, shown via .is-fullscreen
+   class on the button. Pure CSS means no inline-style race between
+   concurrent onResized async calls - a single classList.toggle is atomic. */
+#fullscreen-exit-icon { display: none; }
+.fullscreen-btn.is-fullscreen #fullscreen-enter-icon { display: none; }
+.fullscreen-btn.is-fullscreen #fullscreen-exit-icon { display: block; }
+#video-region .pip-placeholder {
+  display: none;
+  position: absolute;
+  inset: 0;
+  background: #0e0e10;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  color: #adadb8;
+  font-size: 14px;
+  z-index: 4;
+}
+#video-region .pip-placeholder svg {
+  opacity: 0.35;
+}
+#video-region.in-pip .pip-placeholder {
+  display: flex;
+}
+/* Rescue controls inside the placeholder (see index.html for why these
+ * exist). Kept visually quiet - a pill row under the caption - since the
+ * common case is the user never needing them. */
+.pip-placeholder-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+.pip-placeholder-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border: 1px solid #3a3a3d;
+  border-radius: 999px;
+  background: #18181b;
+  color: #efeff1;
+  font-size: 13px;
+  cursor: pointer;
+}
+.pip-placeholder-btn:hover {
+  background: #26262c;
+  border-color: #53535f;
+}
+.pip-placeholder-btn svg {
+  opacity: 1; /* override the placeholder's faded icon rule */
+}
+
+.quality-menu {
+  position: fixed;
+  display: none;
+  flex-direction: column;
+  background: #18181b;
+  border: 1px solid #3a3a3d;
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+}
+.quality-menu.open {
+  display: flex;
+}
+/* Vertical list of quality options. */
+.quality-menu-pills {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 130px;
+}
+.quality-menu-item {
+  background: none;
+  border: none;
+  color: #efeff1;
+  font-size: 13px;
+  text-align: left;
+  padding: 7px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  width: 100%;
+}
+.quality-menu-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.quality-menu-item.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+.quality-menu-empty {
+  color: #777;
+  font-size: 12px;
+  padding: 6px 10px;
+  font-style: italic;
+  white-space: nowrap;
+}
+/* Thin rule between Auto and the manual quality options. */
+.quality-menu-sep {
+  height: 1px;
+  background: #2c2c30;
+  margin: 3px 2px;
+}
+/* Thin rule between quality pills and the low-latency toggle. */
+.quality-menu-divider {
+  height: 1px;
+  background: #2c2c30;
+  margin: 3px 2px;
+}
+/* Full-width row for the low-latency on/off toggle. */
+.quality-menu-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  background: none;
+  border: none;
+  color: #adadb8;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  width: 100%;
+  text-align: left;
+  white-space: nowrap;
+}
+.quality-menu-toggle:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #efeff1;
+}
+/* Pill-style toggle switch, same visual idiom as OS toggles. */
+.quality-toggle-switch {
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  background: #3a3a3d;
+  position: relative;
+  flex-shrink: 0;
+  transition: background 0.15s;
+  pointer-events: none;
+}
+.quality-toggle-switch::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #adadb8;
+  transition: transform 0.15s, background 0.15s;
+}
+.quality-menu-toggle.on .quality-toggle-switch {
+  background: var(--accent);
+}
+.quality-menu-toggle.on .quality-toggle-switch::after {
+  transform: translateX(12px);
+  background: #fff;
+}
+
+#chat-pane {
+  grid-column: 3;
+  grid-row: 2;
+  background: #18181b;
+  border-left: 1px solid #2c2c30;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  /* Without this, #chat-pane (a flex item of the grid row) won't
+     respect its grid-allocated height - it'll grow to fit its
+     content instead, which inflates the grid row, then the page,
+     then everything measured from it (including #video-region,
+     which is how this bug showed up as the embedded video shrinking
+     to nothing - its measured height was actually growing into
+     uselessness, not shrinking, as chat messages accumulated). */
+  min-height: 0;
+}
+/* Collapsed state (#app.chat-collapsed, see the grid-level rule
+   further up) - everything that was visible at the normal 320px
+   width is hidden outright rather than just clipped by the
+   shrunk-to-36px column, since clipping alone would leave
+   half-cut-off text/buttons visible rather than a clean empty
+   rail. #chat-expand-strip (declared separately below, NOT inside
+   this rule) is the one exception - it's specifically the thing
+   that should still be visible at this width. */
+#app.chat-collapsed #chat-pane > :not(#chat-expand-strip) {
+  display: none;
+}
+#chat-pane .chat-header {
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #adadb8;
+  border-bottom: 1px solid #2c2c30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.chat-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-collapse-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: #adadb8;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+.chat-collapse-toggle:hover {
+  color: #efeff1;
+}
+/* The collapsed rail itself - covers #chat-pane's full height at
+   the column's shrunk 36px width, and is the only child of
+   #chat-pane the rule above doesn't hide. Centered icon-only
+   button rather than text, since 36px isn't wide enough to also
+   fit a label the way the expanded state's "Collapse" text does. */
+.chat-expand-strip {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #6d6d72;
+  cursor: pointer;
+}
+#app.chat-collapsed .chat-expand-strip {
+  display: flex;
+}
+.chat-expand-strip:hover {
+  color: #efeff1;
+  background: rgba(255, 255, 255, 0.06);
+}
+.automod-toggle-btn {
+  background: #2e1a52;
+  border: 1px solid #6441a5;
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.automod-toggle-btn:hover {
+  background: #3a2266;
+}
+.automod-toggle-btn.has-pending {
+  border-color: #ff9147;
+}
+.automod-queue-count {
+  background: #ff9147;
+  color: #18181b;
+  border-radius: 8px;
+  padding: 0 5px;
+  font-size: 10px;
+  min-width: 14px;
+  text-align: center;
+  display: none;
+}
+.automod-queue-count.visible {
+  display: inline-block;
+}
+#chat-pane .chat-status {
+  font-size: 11px;
+  font-weight: 400;
+  color: #666;
+}
+/* ── AutoMod queue panel ────────────────────────────────────────
+   Slides in above .chat-body (a sibling, not an overlay) when
+   toggled via .automod-toggle-btn - same "push the layout, don't
+   float on top" approach #channel-info-bar uses below the video,
+   rather than z-index tricks. Capped height + its own scroll so a
+   backlog of held messages can't push chat itself out of view. */
+.automod-panel {
+  max-height: 220px;
+  overflow-y: auto;
+  border-bottom: 1px solid #2c2c30;
+  background: #131315;
+  flex-shrink: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dark) #131315;
+}
+.automod-panel-empty {
+  padding: 14px 12px;
+  color: #6d6d72;
+  font-size: 12px;
+  text-align: center;
+  font-style: italic;
+}
+.automod-item {
+  padding: 8px 12px;
+  border-bottom: 1px solid #232327;
+}
+.automod-item-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+.automod-item-user {
+  font-weight: 700;
+  color: var(--accent-text);
+  font-size: 12px;
+}
+.automod-item-category {
+  font-size: 10px;
+  color: #6d6d72;
+  text-transform: uppercase;
+}
+.automod-item-text {
+  font-size: 13px;
+  color: #efeff1;
+  word-wrap: break-word;
+  margin-bottom: 6px;
+}
+.automod-item-actions {
+  display: flex;
+  gap: 6px;
+}
+.automod-item-actions button {
+  flex: 1;
+  border: none;
+  border-radius: 4px;
+  padding: 5px 0;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.automod-allow-btn {
+  background: #2e7d32;
+  color: white;
+}
+.automod-allow-btn:hover {
+  background: #388e3c;
+}
+.automod-deny-btn {
+  background: #a33333;
+  color: white;
+}
+.automod-deny-btn:hover {
+  background: #a33333;
+}
+.automod-item-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* ── Inline AutoMod held-message line (in the chat stream itself) ─
+   Mirrors what Twitch's own client shows: the message appears where
+   it would have in chat, with Allow/Deny buttons right on it.
+   Left border + muted background makes it visually distinct from
+   normal chat lines without being jarring. */
+.chat-line.is-automod-held {
+  border-left: 3px solid #ff9147;
+  background: #1e1a14;
+  padding: 5px 10px 5px 9px;
+  margin: 2px 0;
+  border-radius: 0 4px 4px 0;
+}
+.automod-held-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #ff9147;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 3px;
+}
+.automod-held-category {
+  font-size: 10px;
+  color: #6d6d72;
+  text-transform: uppercase;
+  font-weight: 400;
+}
+.automod-held-body {
+  margin-bottom: 5px;
+  word-wrap: break-word;
+}
+.automod-held-username {
+  color: var(--accent-text);
+}
+.automod-inline-actions {
+  display: flex;
+  gap: 6px;
+}
+.automod-inline-actions .automod-allow-btn,
+.automod-inline-actions .automod-deny-btn {
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.automod-inline-actions .automod-allow-btn {
+  background: #2e7d32;
+  color: white;
+}
+.automod-inline-actions .automod-allow-btn:hover {
+  background: #388e3c;
+}
+.automod-inline-actions .automod-deny-btn {
+  background: #a33333;
+  color: white;
+}
+.automod-inline-actions .automod-deny-btn:hover {
+  background: #a33333;
+}
+.automod-inline-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+#chat-pane .chat-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-wrap: break-word;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dark) #18181b;
+  /* Same fix as #chat-pane above - a flex child with flex:1 still
+     needs min-height:0 to actually let overflow-y:auto clip and
+     scroll its content, rather than growing to fit it. */
+  min-height: 0;
+  /* The browser's native scroll anchoring (which silently adjusts
+     scrollTop when content is removed above the viewport) is how
+     "pause while reading" used to survive trimAndScroll() removing
+     old lines off the top - but anchoring is a heuristic, not an
+     exact accounting: per spec, if the browser's chosen anchor
+     node's own content changes without its box moving, that one
+     trim's compensation is silently skipped. Each miss nudges
+     scrollTop a little further toward the bottom (trims only ever
+     shorten content from the top, so misses are one-directional,
+     never self-correcting). Over a few trims this is invisible,
+     but over many thousands across a long stream it accumulates
+     until scrollTop drifts inside the 80px "atBottom" threshold on
+     its own, with the user never having touched their scroll wheel
+     - which silently resumes auto-scroll and makes "pause" stop
+     working until the page is reloaded. Disabling native anchoring
+     and having trimAndScroll() do its own exact, script-driven
+     scrollTop compensation (see chat.js) removes the heuristic
+     entirely, so there's nothing left to drift. */
+  overflow-anchor: none;
+}
+/* Firefox uses scrollbar-color above; everything Chromium-based
+   (which includes WebView2, what this app actually runs on) uses
+   the ::-webkit-scrollbar pseudo-elements below. Both are kept so
+   the styling holds up if this ever runs under a different engine. */
+#chat-pane .chat-body::-webkit-scrollbar {
+  width: 8px;
+}
+#chat-pane .chat-body::-webkit-scrollbar-track {
+  background: #18181b;
+}
+#chat-pane .chat-body::-webkit-scrollbar-thumb {
+  background: var(--accent-dark);
+  border-radius: 4px;
+}
+#chat-pane .chat-body::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+/* -----------------------------------------------------------------
+   Channels sidebar - followed channels (live + offline) and a
+   top-live-channels rail, mirroring the official site's left nav.
+   Lives in grid column 1, same flex/min-height pattern as
+   #chat-pane so its internal lists scroll instead of inflating the
+   grid row.
+----------------------------------------------------------------- */
+#channels-sidebar {
+  grid-column: 1;
+  grid-row: 2;
+  background: #18181b;
+  border-right: 1px solid #2c2c30;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dark) #18181b;
+  padding: 8px 0 16px;
+  min-width: 0;
+}
+#channels-sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+#channels-sidebar::-webkit-scrollbar-track {
+  background: #18181b;
+}
+#channels-sidebar::-webkit-scrollbar-thumb {
+  background: var(--accent-dark);
+  border-radius: 4px;
+}
+.sidebar-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #adadb8;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 12px 12px 6px;
+}
+.sidebar-empty {
+  font-size: 12px;
+  color: #666;
+  padding: 4px 12px 12px;
+  line-height: 1.4;
+}
+.sidebar-channel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  color: #efeff1;
+  font: inherit;
+}
+.sidebar-channel:hover {
+  background: #2c2c30;
+}
+.sidebar-channel-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+  background: #2c2c30;
+}
+.sidebar-channel-avatar.offline {
+  opacity: 0.5;
+}
+.sidebar-channel-avatar-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.sidebar-channel-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.sidebar-channel-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-channel-name.offline {
+  color: #adadb8;
+  font-weight: 400;
+}
+.sidebar-channel-sub {
+  font-size: 12px;
+  color: #adadb8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-channel-status {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.sidebar-channel-status.live {
+  color: #efeff1;
+}
+.sidebar-channel-status.offline {
+  color: #555;
+  font-weight: 400;
+}
+.sidebar-channel-viewer-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sidebar-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #eb0400;
+  flex-shrink: 0;
+}
+/* Sits directly under the viewer count in the same right-aligned
+   column - mirrors the official site's purple "DropsEnabled" tag
+   (see drops.js for detection), placed here rather than crowding the
+   name/game text on the left, which already truncates on longer
+   channel names. */
+.sidebar-drops-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--accent-text);
+}
+/* Wraps .sidebar-channel + .sidebar-notify-toggle as siblings (see
+   buildChannelRow's comment on why the bell can't be nested inside
+   the row's own <button>). flex:1 + width:auto on the inner
+   .sidebar-channel override its own width:100% rule above, which
+   only applies correctly when it's NOT wrapped (Top Live rows,
+   which have no notify toggle and so return the bare button
+   directly with no wrapper at all). */
+.sidebar-channel-row {
+  display: flex;
+  align-items: stretch;
+}
+.sidebar-channel-row .sidebar-channel {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+.sidebar-notify-toggle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  border: none;
+  background: transparent;
+  color: #adadb8;
+  cursor: pointer;
+  border-radius: 4px;
+  margin: 4px 4px 4px 0;
+  /* Hidden by default, revealed on hover of the row - same
+     "appears on hover" pattern as the chat-line hover actions
+     (.chat-line-actions), so the sidebar's default look stays
+     uncluttered for the common case of a handful of opted-in
+     channels among many followed ones. Always shown once active
+     (opted in) regardless of hover, so the user has a persistent
+     way to see/confirm which channels they've turned this on for
+     without needing to hover each row one at a time. */
+  opacity: 0;
+}
+.sidebar-channel-row:hover .sidebar-notify-toggle,
+.sidebar-notify-toggle.active {
+  opacity: 1;
+}
+.sidebar-notify-toggle:hover {
+  background: #3a3a3d;
+  color: #efeff1;
+}
+.sidebar-notify-toggle.active {
+  color: var(--accent-text);
+}
+.sidebar-show-more {
+  background: none;
+  border: none;
+  color: var(--accent-text);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 8px 12px;
+  text-align: left;
+  width: 100%;
+}
+.sidebar-show-more:hover {
+  text-decoration: underline;
+}
+.sidebar-login-prompt {
+  font-size: 12px;
+  color: #adadb8;
+  padding: 4px 12px 14px;
+  line-height: 1.5;
+}
+.sidebar-section-divider {
+  height: 1px;
+  background: #2c2c30;
+  margin: 8px 0;
+}
+
+/* ── Kick-mode sidebar look ──────────────────────────────────────────
+   kick.com's sidebar differs from Twitch's beyond the accent color, so
+   the accent variables alone can't cover it: section headers are bold
+   white sentence-case ("Following"/"Recommended") rather than small
+   gray all-caps, the live indicator is Kick green, and rows highlight
+   as inset rounded pills. The "Recommended" retitle itself happens in
+   applyPlatformUi (main.js); everything visual lives here. */
+body.kick-mode .sidebar-section-title {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  padding: 14px 12px 8px;
+}
+body.kick-mode .sidebar-live-dot {
+  background: var(--accent);
+  width: 8px;
+  height: 8px;
+}
+/* Inset rounded hover pill instead of the full-bleed Twitch highlight.
+   Scoped to the two list containers (not bare .sidebar-channel) so any
+   future sidebar-channel reuse elsewhere keeps its own geometry. */
+body.kick-mode #top-live-list .sidebar-channel,
+body.kick-mode #followed-channels-list .sidebar-channel {
+  width: calc(100% - 8px);
+  margin: 0 4px;
+  border-radius: 6px;
+}
+body.kick-mode .sidebar-channel:hover {
+  background: #26262a;
+}
+body.kick-mode .sidebar-channel-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* ---------------------------------------------------------------
+   Home feed - carousel + recommended grid + category rows, shown
+   in #video-column in place of the empty player placeholder
+   whenever nothing is playing (see home.js).
+   --------------------------------------------------------------- */
+#home-feed {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 20px 24px 40px;
+  display: none; /* toggled to block by home.js show()/hide() */
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dark) #18181b;
+}
+#home-feed::-webkit-scrollbar {
+  width: 8px;
+}
+#home-feed::-webkit-scrollbar-track {
+  background: #18181b;
+}
+#home-feed::-webkit-scrollbar-thumb {
+  background: var(--accent-dark);
+  border-radius: 4px;
+}
+#home-feed::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+/* Same positioning/scrollbar treatment as #home-feed, since the two
+   occupy the same slot and are mutually exclusive (only one tab
+   active at a time). */
+#browse-page {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 20px 24px 40px;
+  display: none; /* toggled by browse.js show()/hide() */
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dark) #18181b;
+}
+#browse-page::-webkit-scrollbar {
+  width: 8px;
+}
+#browse-page::-webkit-scrollbar-track {
+  background: #18181b;
+}
+#browse-page::-webkit-scrollbar-thumb {
+  background: var(--accent-dark);
+  border-radius: 4px;
+}
+#browse-page::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+#vods-page {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 20px 24px 40px;
+  display: none; /* toggled by vods.js show()/hide() */
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dark) #18181b;
+}
+#vods-page::-webkit-scrollbar {
+  width: 8px;
+}
+#vods-page::-webkit-scrollbar-track {
+  background: #18181b;
+}
+#vods-page::-webkit-scrollbar-thumb {
+  background: var(--accent-dark);
+  border-radius: 4px;
+}
+#vods-page::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+.vods-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.vods-channel-name {
+  font-size: 20px;
+  font-weight: 700;
+  color: #efeff1;
+}
+.vods-header-label {
+  font-size: 14px;
+  color: #adadb8;
+}
+/* VOD grid: slightly wider cards than live since thumbnails are 16:9
+   stills and titles are often longer for recorded content. */
+.vods-grid {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+/* Views badge: bottom-right of thumbnail, mirrors duration badge
+   on the left (which reuses .home-grid-viewers positioning). */
+.vod-views-badge {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #efeff1;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+/* Resume indicator - a thin bar along the bottom edge of the
+   thumbnail showing how far into the VOD you got last time,
+   matching the Netflix/YouTube "continue watching" convention.
+   Sits on a translucent dark track so it reads on any thumbnail. */
+.vod-resume-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.5);
+}
+.vod-resume-fill {
+  height: 100%;
+  background: var(--accent);
+}
+/* VOD meta row has no avatar (all from same channel) so remove the
+   gap that home-grid-meta reserves for it. */
+.vods-meta {
+  margin-top: 6px;
+}
+.browse-games-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 16px;
+}
+.browse-game-card {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.browse-game-art {
+  width: 100%;
+  aspect-ratio: 188 / 250;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #18181b;
+}
+.browse-game-card:hover .browse-game-art {
+  outline: 2px solid var(--accent);
+}
+.browse-game-name {
+  color: #efeff1;
+  font-size: 13px;
+  font-weight: 600;
+}
+.browse-back-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.browse-back-btn {
+  background: none;
+  border: 1px solid #3a3a3d;
+  color: #efeff1;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.browse-back-btn:hover {
+  background: #2c2c30;
+}
+.browse-category-title {
+  color: #efeff1;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* ── Browse page header (title + pills + tabs + search/sort) ──
+   Added to match twitch.tv/directory's own layout 1:1 - previously
+   this page only ever showed a bare "Categories" heading straight
+   into the games grid, with no pills, no Live Channels view, and
+   no search. */
+.browse-page-title {
+  font-size: 38px;
+  font-weight: 800;
+  margin-bottom: 20px;
+}
+
+/* The 4 sub-directory pills (Games/IRL/Music & DJs/Talk Shows &
+   Podcasts) - each routes to that ONE specific Twitch category's
+   live channels (IRL/Music/Talk Shows & Podcasts are real, single
+   categories on Twitch, not groupings - see browse.js's
+   PILL_CATEGORIES for the full reasoning), except Games, which
+   has no single equivalent category and instead just shows this
+   page's own Categories grid (effectively "every game"). There's
+   deliberately no "Esports" pill - see PILL_CATEGORIES' comment
+   in browse.js for why. */
+.browse-pills-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.browse-pill {
+  /* flex: 0 0 auto (not 1 1 180px) - pills size to their own
+     content and sit inline, rather than stretching to fill the
+     row's full width like oversized rectangular boxes. */
+  flex: 0 0 auto;
+  border: none;
+  /* Fully-rounded capsule shape - half of the pill's own height,
+     via a value comfortably larger than that height (999px) so it
+     always resolves to a true pill regardless of font-size
+     changes, rather than the old 6px corner radius, which on a
+     14px-padded box just looked like a barely-rounded rectangle. */
+  border-radius: 999px;
+  padding: 7px 16px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent);
+  transition: filter 0.1s, outline-color 0.1s;
+}
+.browse-pill:hover {
+  filter: brightness(1.12);
+}
+.browse-pill.is-active {
+  background: var(--accent-dark);
+  outline: 2px solid #fff;
+  outline-offset: -2px;
+}
+.browse-pill svg {
+  flex-shrink: 0;
+  opacity: 0.9;
+  width: 14px;
+  height: 14px;
+}
+
+/* Categories / Live Channels tab switcher - underline-style tabs,
+   same visual language as the channels-sidebar/chat-tabs elsewhere
+   in the app rather than inventing a new tab style. */
+.browse-tabs-row {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #2c2c30;
+}
+.browse-tab {
+  background: none;
+  border: none;
+  color: #adadb8;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 0 0 10px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.browse-tab.is-active {
+  color: #efeff1;
+  border-bottom-color: var(--accent);
+}
+.browse-tab:hover:not(.is-active) {
+  color: #efeff1;
+}
+
+/* Search box + sort-by dropdown row, above the grid */
+.browse-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.browse-search-wrap {
+  position: relative;
+  flex: 1 1 280px;
+  max-width: 420px;
+}
+.browse-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #6d6d72;
+  pointer-events: none;
+}
+.browse-search-input {
+  width: 100%;
+  background: #18181b;
+  border: 1px solid #3a3a3d;
+  border-radius: 4px;
+  color: #efeff1;
+  font-size: 13px;
+  padding: 8px 10px 8px 32px;
+  outline: none;
+}
+.browse-search-input:focus {
+  border-color: var(--accent);
+}
+.browse-search-input::placeholder {
+  color: #6d6d72;
+}
+.browse-sort-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.browse-sort-select {
+  background: #18181b;
+  border: 1px solid #3a3a3d;
+  border-radius: 4px;
+  color: #efeff1;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 10px;
+  outline: none;
+  cursor: pointer;
+}
+.browse-sort-select:focus {
+  border-color: var(--accent);
+}
+
+/* Viewer count line under a category card's name - approximated
+   from a live-stream sample, not Twitch's own exact number; see
+   get_category_viewer_counts()'s comment in main.rs for why there
+   isn't a public API for the real figure. */
+.browse-game-viewers {
+  color: #adadb8;
+  font-size: 12px;
+}
+
+/* Auto-loading footer under both infinite-scrolling grids on the
+   Browse page (Categories and Live Channels) - replaces a clickable
+   "Show more" button, since the next page now loads automatically
+   as the user scrolls near the bottom (_handleScroll() in
+   browse.js), matching twitch.tv's own directory. */
+.browse-pagination-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 8px 0;
+  color: #adadb8;
+  font-size: 13px;
+  min-height: 20px; /* avoids a layout jump when the spinner/text appears */
+}
+.browse-pagination-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #3a3a3d;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: browse-spin 0.7s linear infinite;
+}
+@keyframes browse-spin {
+  to { transform: rotate(360deg); }
+}
+
+.home-carousel {
+  position: relative;
+  margin-bottom: 28px;
+}
+.home-carousel-track {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  padding-bottom: 4px;
+}
+.home-carousel-track::-webkit-scrollbar {
+  display: none;
+}
+.home-carousel-card {
+  position: relative;
+  flex: 0 0 340px;
+  scroll-snap-align: start;
+  background: #18181b;
+  border: none;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+.home-carousel-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  display: block;
+  background: #222;
+}
+.home-carousel-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  position: relative;
+}
+.home-carousel-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #333;
+}
+.home-carousel-text {
+  flex: 1;
+  min-width: 0;
+}
+.home-carousel-name {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--accent-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-carousel-game {
+  font-size: 13px;
+  color: #adadb8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-carousel-viewers {
+  font-size: 12px;
+  color: #adadb8;
+  flex-shrink: 0;
+  align-self: center;
+}
+.home-carousel-nav {
+  position: absolute;
+  top: 0;
+  bottom: 4px;
+  width: 36px;
+  background: rgba(14, 14, 16, 0.6);
+  border: none;
+  color: #efeff1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.home-carousel-nav:hover {
+  background: rgba(14, 14, 16, 0.85);
+}
+.home-carousel-prev {
+  left: 0;
+}
+.home-carousel-next {
+  right: 0;
+}
+.home-section {
+  margin-bottom: 28px;
+}
+.home-section-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+.home-grid-card {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font-family: inherit;
+}
+.home-grid-thumb-wrap {
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.home-grid-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  display: block;
+  background: #222;
+}
+.home-grid-viewers {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #efeff1;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.home-grid-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.home-grid-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #333;
+  margin-top: 2px;
+}
+.home-grid-text {
+  flex: 1;
+  min-width: 0;
+}
+.home-grid-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #efeff1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-grid-name {
+  font-size: 13px;
+  color: var(--accent-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-grid-game {
+  font-size: 12px;
+  color: #adadb8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-card-tags {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.home-card-tag {
+  font-size: 11px;
+  color: #efeff1;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.home-live-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: #eb0400;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+/* Mirrors the official site's purple "Drops Enabled" pill on stream
+   cards/thumbnails - see drops.js for how this is detected. Sits
+   top-right so it never collides with the LIVE badge (top-left) or
+   the viewer count (bottom-right). */
+.home-drops-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--accent);
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.home-show-more {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 12px auto 0;
+  background: none;
+  border: none;
+  color: var(--accent-text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 6px 10px;
+}
+.home-show-more:hover {
+  text-decoration: underline;
+}
+.home-show-more:disabled {
+  opacity: 0.5;
+  cursor: default;
+  text-decoration: none;
+}
+
+.chat-line {
+  margin-bottom: 4px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.chat-line.system {
+  color: #777;
+  font-style: italic;
+  font-size: 12px;
+}
+.chat-username {
+  font-weight: 700;
+  margin-right: 4px;
+}
+.chat-username-clickable {
+  cursor: pointer;
+}
+.chat-username-clickable:hover {
+  text-decoration: underline;
+}
+.chat-badge {
+  height: 1.1em;
+  width: 1.1em;
+  vertical-align: middle;
+  margin-right: 3px;
+  display: inline-block;
+}
+/* Kick badges are inline-SVG recreations (see kick-badges.js) inside a
+   span wearing the same .chat-badge box as Twitch's <img> badges - the
+   svg just needs to fill that box. */
+.kick-badge svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* Wraps a message's badge <img>s so they can be found and backfilled
+   after badgeMap finishes loading (see _backfillBadges() in
+   chat.js) - purely a DOM anchor, no visual presence of its own. */
+.chat-badges-slot {
+  display: inline;
+}
+.chat-emote {
+  height: 1.6em;
+  width: auto;
+  vertical-align: middle;
+  margin: 0 1px;
+  display: inline-block;
+}
+.chat-message-text {
+  color: #efeff1;
+}
+/*
+  Floating "jump to latest" button, same pattern as Twitch's own
+  chat UI: appears when the user has scrolled up to read history
+  (auto-scroll-on-new-message is suspended in that state, handled in
+  chat.js's trimAndScroll), and disappears once they're back at the
+  bottom or click it to jump there directly.
+
+  Positioned absolutely within #chat-pane (not .chat-body) so it
+  floats consistently just above the input row regardless of scroll
+  position, rather than scrolling along with the message list.
+*/
+.jump-to-latest-btn {
+  display: none;
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  /* Rides the input row's REAL height (published by _autosizeChatInput
+     as --chat-input-row-h) rather than a hardcoded offset - the old
+     fixed 50px assumed a one-line input, so the auto-growing textarea
+     expanded straight under the pill. Fallback matches the one-line
+     height for the moments before the first autosize runs. */
+  bottom: calc(var(--chat-input-row-h, 44px) + 8px);
+  background: rgba(24, 24, 27, 0.8);
+  backdrop-filter: blur(4px);
+  border: none;
+  color: #efeff1;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  z-index: 5;
+}
+.jump-to-latest-btn.visible {
+  display: flex;
+}
+.jump-to-latest-btn:hover {
+  background: rgba(44, 44, 48, 0.85);
+}
+.chat-input-row {
+  padding: 8px 10px 10px;
+  border-top: 1px solid #2c2c30;
+  flex-shrink: 0;
+}
+/* Unified container that visually wraps badge + input + send button
+   into a single rounded input field, matching Twitch's composer look.
+   align-items:flex-end (not center) so the badge/Send button stay
+   pinned to the bottom, level with the textarea's first line, as it
+   grows upward with multi-line text - matching Twitch's own composer,
+   where Send never drifts to vertically center against a tall box. */
+.chat-input-wrapper {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  /* Twitch's composer recipe (and the same one this app's header input
+     already uses): a field DARKER than its panel with a clearly visible
+     border - the old #2c2c30 fill under a #3a3a3d border was two
+     near-identical grays, which is why the box read as a floating
+     borderless blob instead of an input. */
+  background: #0e0e10;
+  border: 1px solid #53535f;
+  border-radius: 4px;
+  padding: 0 10px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.chat-input-wrapper:hover {
+  border-color: #6d6d72;
+}
+.chat-input-wrapper:focus-within {
+  border-color: var(--accent);
+  /* Ring instead of a thicker border so focusing doesn't shift layout;
+     together with the 1px border this reads as Twitch's 2px purple. */
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.chat-input::placeholder {
+  color: #868690;
+}
+/* Auto-growing textarea, not a single-line <input> - long messages
+   used to scroll horizontally out of view as you typed past the
+   box's width instead of wrapping. Height is driven by JS
+   (autosizeChatInput() in chat.js, mirroring scrollHeight) rather
+   than CSS rows, since rows alone can't track variable wrapped
+   line counts. max-height caps it at ~6 lines so a very long
+   message scrolls internally instead of pushing chat history
+   off-screen; resize:none stops the browser's own drag-handle,
+   which would let it overlap the message list above it. */
+.chat-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #efeff1;
+  /* 4px on the right so wrapped text (and the caret at end-of-line)
+     isn't flush against the scrollbar thumb when a draft overflows. */
+  padding: 9px 4px 9px 0;
+  font-size: 13px;
+  font-family: inherit;
+  min-width: 0;
+  outline: none;
+  resize: none;
+  max-height: 120px;
+  /* Starts hidden, not auto - JS (_autosizeChatInput in chat.js)
+     switches this to auto only once scrollHeight genuinely exceeds
+     max-height. Chromium renders a visible scrollbar-gutter/spin-
+     button-looking affordance on a <textarea> with overflow-y:auto
+     even while content fits well under max-height - that stray
+     up/down-arrow box on a single short line was this, not an
+     actual scrollbar with anything to scroll. */
+  overflow-y: hidden;
+  /* When a long draft does overflow past max-height it scrolls
+     internally. The scrollbar styling lives in the ::-webkit-scrollbar
+     rules below - NOT in scrollbar-width/scrollbar-color: in Chromium
+     (so WebView2), setting either standard property makes the engine
+     ignore ::-webkit-scrollbar entirely and render its own stock
+     track-and-thumb widget, which is the wide gray bar that used to
+     sit flush against the Send button. Every webview Tauri uses
+     (WebView2, WebKitGTK, WKWebView) honors the webkit pseudos, so
+     they're the reliable path here. */
+  line-height: 1.4;
+  /* Matches the single-line <input> this replaced, so the row
+     doesn't jump taller the instant it's swapped in. */
+  height: 34px;
+}
+/* Slim overlay-style scrollbar for an overflowed draft: thumb only,
+   no track/arrows, so the rounded input wrapper reads as one piece
+   and nothing chunky sits next to the Send button. Only visible at
+   all once _autosizeChatInput flips overflow-y to auto (6+ lines). */
+.chat-input::-webkit-scrollbar {
+  width: 6px;
+}
+.chat-input::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-input::-webkit-scrollbar-thumb {
+  background: #3a3a3d;
+  border-radius: 3px;
+}
+.chat-input::-webkit-scrollbar-thumb:hover {
+  background: #53535f;
+}
+.chat-input::placeholder {
+  color: #6d6d72;
+}
+.chat-input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* Send button: inline inside the wrapper, only visible when there's
+   text. padding matches .chat-input's own 9px vertical padding so
+   it sits level with the textarea's bottom line now that the
+   wrapper aligns to flex-end instead of center. */
+.chat-send-btn {
+  background: none;
+  border: none;
+  color: var(--accent-text);
+  padding: 9px 0;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: none;
+}
+.chat-input-wrapper.has-text .chat-send-btn:not(:disabled) {
+  display: block;
+}
+.chat-send-btn:hover {
+  color: var(--accent);
+}
+.chat-send-btn:disabled {
+  display: none;
+}
+/* Emote picker toggle button: unlike Send, always visible (not gated on
+   has-text) since it's how you START composing with an emote, same as
+   Twitch's and 7TV's own smiley-face buttons. Muted by default so it
+   doesn't compete with placeholder text; brightens on hover/while the
+   panel is open. */
+.chat-emote-btn {
+  background: none;
+  border: none;
+  color: #adadb8;
+  padding: 9px 0;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.chat-emote-btn:hover {
+  color: #efeff1;
+}
+.chat-emote-btn.open,
+.chat-emote-btn:hover.open {
+  color: var(--accent-text);
+}
+.chat-emote-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ── Chat message hover actions (copy / reply / mod tools) ───── */
+.chat-line {
+  position: relative; /* anchor for the action buttons */
+}
+.chat-line-actions {
+  display: none;
+  position: absolute;
+  top: -2px;
+  right: 0;
+  background: #2c2c30;
+  border: 1px solid #3a3a3d;
+  border-radius: 6px;
+  padding: 2px 3px;
+  gap: 2px;
+  align-items: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  z-index: 10;
+  /* row-reverse + DOM order (reply, copy, delete, timeout, ban) puts
+     reply furthest right (closest to where the eye lands first)
+     down through ban furthest left - mirrors most chat clients'
+     "safe actions near, destructive actions far" convention. */
+  flex-direction: row-reverse;
+}
+.chat-line:hover .chat-line-actions {
+  display: flex;
+}
+.chat-line-action-btn {
+  background: none;
+  border: none;
+  color: #adadb8;
+  cursor: pointer;
+  padding: 4px 5px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.chat-line-action-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: #efeff1;
+}
+.chat-line-action-btn:disabled {
+  /* Grayed-out rather than hidden for non-mods/self-targeting, per
+     the mod-tools design decision - same row, same width, for
+     everyone; only the interactivity differs. Currently only the
+     hover row's Delete button uses this - timeout/ban moved to the
+     user card (see .user-card-* below). */
+  opacity: 0.35;
+  cursor: default;
+}
+.chat-line-action-btn:disabled:hover {
+  background: none;
+  color: #adadb8;
+}
+
+/* ── Right-click context menu ──────────────────────────────────
+   Same role as .emote-autocomplete/.link-preview-popup elsewhere
+   in this file - position:fixed on body so it's never clipped by
+   the chat pane's overflow:hidden ancestors. */
+.chat-context-menu {
+  position: fixed;
+  min-width: 160px;
+  background: #18181b;
+  border: 1px solid #3a3a3d;
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.chat-context-menu-item {
+  background: none;
+  border: none;
+  color: #efeff1;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.chat-context-menu-item:hover:not(:disabled) {
+  background: rgba(145, 71, 255, 0.18);
+}
+.chat-context-menu-item:disabled {
+  color: #5c5c61;
+  cursor: default;
+}
+.chat-context-menu-item-danger:not(:disabled) {
+  color: #ff5c5c;
+}
+.chat-context-menu-item-danger:hover:not(:disabled) {
+  background: rgba(233, 25, 22, 0.18);
+}
+/* ── User card (click a username) ──────────────────────────────
+   Same position:fixed-on-body, anchored-to-a-clicked-element
+   pattern as .emote-autocomplete/.link-preview-popup/.chat-context-
+   menu elsewhere in this file. */
+.user-card {
+  position: fixed;
+  width: 260px;
+  background: #18181b;
+  border: 1px solid #3a3a3d;
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.55);
+  z-index: 9999;
+  /* Caps the WHOLE card (header + scrollable body together) to
+     70% of the viewport height. The body below is the part that
+     actually scrolls; max-height/overflow here used to be on this
+     same element covering everything including the header, which
+     conflated "pin the header in place" with "cap how tall the
+     content can get" into a single rule doing both jobs at once.
+     Splitting them (header pinned via flex-shrink:0 below, body
+     scrolling on its own) makes each piece responsible for only
+     the one thing it needs to do, which is more robust than
+     relying on one rule to do both. */
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+}
+.user-card-loading {
+  color: #adadb8;
+  font-size: 13px;
+  padding: 8px 2px;
+}
+.user-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  /* Never shrinks or scrolls away, regardless of how tall the
+     scrollable body below ends up - the close button (and the
+     drag handle this whole header doubles as) must always stay
+     reachable no matter how far the body is scrolled. */
+  flex-shrink: 0;
+  /* Drag handle - see _makeUserCardDraggable in chat.js, which
+     listens for mousedown anywhere inside the card but only
+     starts a drag if it lands within .user-card-header. */
+  cursor: grab;
+}
+/* Added by _makeUserCardDraggable for the duration of an active
+   drag. Switches the cursor to "grabbing" (rather than leaving it
+   as "grab", which would look like the drag isn't actually
+   registering) and disables text selection - without this,
+   dragging quickly could select the name/avatar area's text the
+   same way dragging over any other text does, which looks broken
+   even though the position update itself still works fine. */
+.user-card.dragging,
+.user-card.dragging .user-card-header {
+  cursor: grabbing;
+  user-select: none;
+}
+.user-card-close-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #adadb8;
+  /* Overrides the "grab" cursor set on .user-card-header, which
+     this button sits inside - it's a normal click target, not
+     part of the drag surface (chat.js stops its mousedown from
+     reaching the header's own drag-start listener). */
+  cursor: pointer;
+}
+.user-card-close-btn:hover {
+  background: #3a3a3d;
+  color: #efeff1;
+}
+/* The loading-state close button sits directly in the card (there
+   is no flex header yet at that point, just the loading text), so
+   it's pinned via absolute positioning relative to the card
+   instead of flex layout. */
+.user-card-loading-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+}
+/* The actual scrollable region - everything except the header
+   (badges, account-created line, mod actions, stats, message
+   history). Paired with .user-card's flex-direction:column and
+   this rule's flex:1, this element grows to fill whatever space
+   is left under the fixed-height header, then clips/scrolls its
+   own content once that space runs out - the header never moves
+   and is never part of what scrolls.
+   min-height:0 mirrors the same fix already used for #chat-pane
+   .chat-body elsewhere in this file: a flex child's default
+   min-height is "auto," which lets it grow to fit its content and
+   ignore overflow/flex-shrinking rules - exactly the "expands
+   infinitely instead of scrolling" failure mode this is fixing.
+   Setting it to 0 lets flex's own shrinking (and this element's
+   own overflow-y) actually take effect instead of being
+   overridden by the content's natural size. */
+.user-card-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dark) #18181b;
+}
+.user-card-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #2c2c30;
+}
+.user-card-name-block {
+  min-width: 0;
+}
+.user-card-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #efeff1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.user-card-login {
+  font-size: 12px;
+  color: #adadb8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.user-card-badges {
+  margin-bottom: 8px;
+}
+.user-card-created {
+  font-size: 12px;
+  color: #adadb8;
+  margin-bottom: 10px;
+}
+.user-card-mod-actions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.user-card-timeout-preset {
+  background: #2c2c30;
+  border: 1px solid #3a3a3d;
+  color: #efeff1;
+  border-radius: 4px;
+  padding: 5px 0;
+  font-size: 11px;
+  cursor: pointer;
+}
+.user-card-timeout-preset:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.user-card-timeout-preset:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.user-card-ban-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.user-card-ban-row button {
+  flex: 1;
+  border: none;
+  border-radius: 4px;
+  padding: 7px 0;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.user-card-delete-btn {
+  background: #2c2c30;
+  color: #efeff1;
+}
+.user-card-delete-btn:hover:not(:disabled) {
+  background: #3a3a3d;
+}
+.user-card-ban-btn {
+  background: #a33333;
+  color: white;
+}
+.user-card-ban-btn:hover:not(:disabled) {
+  background: #a33333;
+}
+.user-card-ban-row button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.user-card-stats {
+  display: flex;
+  gap: 8px;
+  border-top: 1px solid #2c2c30;
+  padding-top: 8px;
+  margin-bottom: 6px;
+}
+.user-card-stat {
+  text-align: center;
+  flex: 1;
+}
+.user-card-stat-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #efeff1;
+}
+.user-card-stat-label {
+  font-size: 10px;
+  color: #adadb8;
+  text-transform: uppercase;
+}
+.user-card-history {
+  border-top: 1px solid #2c2c30;
+  padding-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  /* Independently scrollable once it exceeds ~5 single-line rows,
+     rather than the surrounding card/body growing to fit all
+     (up to USER_CARD_HISTORY_LIMIT, currently 20) entries. Sized
+     in px rather than row-count: row height isn't fixed (a long
+     message wraps via word-break on .user-card-history-text below,
+     so some rows take more vertical space than others), so this is
+     calibrated to "about 5 rows of typical, non-wrapping length"
+     rather than an exact guarantee - matches how Twitch's own card
+     handles the same list. */
+  max-height: 112px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dark) #18181b;
+}
+.user-card-history-row {
+  font-size: 12px;
+  color: #d1d1d6;
+  display: flex;
+  gap: 6px;
+}
+.user-card-history-time {
+  color: #6d6d72;
+  flex-shrink: 0;
+}
+.user-card-history-text {
+  word-break: break-word;
+}
+
+/* ── Deleted/cleared messages (CLEARCHAT/CLEARMSG) ─────────────
+   Dimmed + struck-through rather than replaced with a placeholder
+   sentence - the original message stays in the DOM and is still
+   readable, just visually marked as removed. Hovering restores
+   full brightness/removes the strikethrough so anyone who wants to
+   actually read it back can, without needing a click-to-reveal
+   step; the moderation reason is available as a native tooltip
+   (title attribute, set in _collapseLine()) rather than visible
+   text. opacity (not color/visibility) is used for the dim so it
+   affects badges/emotes/images uniformly, not just text color. */
+.chat-line.is-cleared {
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+.chat-line.is-cleared:hover {
+  opacity: 1;
+}
+.chat-line.is-cleared .chat-message-text {
+  text-decoration: line-through;
+}
+.chat-line.is-cleared:hover .chat-message-text {
+  text-decoration: none;
+}
+
+/* ── Reply indicator bar (above input row when replying) ─────── */
+
+/* ── Input badge (user's own badge shown left of chat input) ─── */
+.chat-input-badge {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding-bottom: 9px;
+}
+.chat-input-badge:empty {
+  display: none;
+}
+.chat-input-badge .chat-badge {
+  width: 18px;
+  height: 18px;
+}
+
+/* ── Fullscreen / large-window chat font bump ────────────────── */
+@media (min-height: 900px), (min-width: 1600px) {
+  #chat-pane .chat-body {
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  .chat-input {
+    font-size: 14px;
+    padding: 10px 0;
+  }
+}
+/* ── Reply indicator (two-row block above the input) ─────────── */
+.chat-reply-indicator {
+  display: none; /* block when active, set by JS */
+  flex-direction: column;
+  padding: 6px 10px 5px;
+  background: #18181b;
+  border-top: 1px solid #2c2c30;
+  font-size: 12px;
+  flex-shrink: 0;
+  gap: 2px;
+}
+/* Row 1: arrow + "Replying to @user" + X */
+.chat-reply-indicator-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.chat-reply-indicator-arrow {
+  color: #adadb8;
+  flex-shrink: 0;
+  font-size: 13px;
+}
+.chat-reply-indicator-header-label {
+  color: #adadb8;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-reply-indicator-cancel {
+  background: none;
+  border: none;
+  color: #adadb8;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.chat-reply-indicator-cancel:hover { color: #efeff1; }
+/* Row 2: quoted message */
+.chat-reply-indicator-body {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #adadb8;
+  padding-left: 18px; /* indent under the arrow */
+}
+.chat-reply-indicator-user {
+  color: #efeff1;
+  font-weight: 600;
+}
+.chat-reply-indicator-text {
+  color: #adadb8;
+}
+/* ── Emote Autocomplete Popup ───────────────────────────────── */
+.emote-autocomplete {
+  /* position/top/left/width set dynamically in JS via getBoundingClientRect */
+  position: fixed;
+  background: #18181b;
+  border: 1px solid #3a3a3d;
+  border-radius: 6px;
+  box-shadow: 0 -4px 16px rgba(0,0,0,0.5);
+  max-height: 260px;
+  overflow-y: auto;
+  z-index: 9999; /* above everything */
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dark) #18181b;
+}
+.emote-autocomplete-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #efeff1;
+  white-space: nowrap;
+  border-radius: 4px;
+}
+.emote-autocomplete-item:hover,
+.emote-autocomplete-item.selected {
+  background: rgba(145, 71, 255, 0.18);
+}
+.emote-autocomplete-img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+/* ── Emote Picker Panel ──────────────────────────────────────
+   Opened via .chat-emote-btn; top/left/width set dynamically in JS
+   (chat-emote-picker.js's _repositionEmotePicker) from the composer's
+   own bounding rect, same fixed-position-anchored-to-a-trigger pattern
+   as .quality-menu and .emote-autocomplete elsewhere in this file. */
+.emote-picker-menu {
+  display: none;
+  position: fixed;
+  flex-direction: column;
+  background: #18181b;
+  border: 1px solid #3a3a3d;
+  border-radius: 6px;
+  box-shadow: 0 -4px 16px rgba(0,0,0,0.5);
+  z-index: 9999; /* above everything, same as .emote-autocomplete */
+  height: 360px;
+  overflow: hidden;
+}
+.emote-picker-menu.open {
+  display: flex;
+}
+.emote-picker-grid-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dark) #18181b;
+}
+.emote-picker-grid-wrap::-webkit-scrollbar {
+  width: 6px;
+}
+.emote-picker-grid-wrap::-webkit-scrollbar-thumb {
+  background: #3a3a3d;
+  border-radius: 3px;
+}
+.emote-picker-section + .emote-picker-section {
+  margin-top: 10px;
+}
+.emote-picker-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: #adadb8;
+  padding: 4px 2px 6px;
+  position: sticky;
+  top: 0;
+  background: #18181b;
+}
+.emote-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
+  gap: 4px;
+}
+.emote-picker-item {
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  aspect-ratio: 1;
+}
+.emote-picker-item:hover {
+  background: rgba(145, 71, 255, 0.18);
+}
+.emote-picker-item img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.emote-picker-empty {
+  color: #adadb8;
+  font-size: 13px;
+  padding: 24px 8px;
+  text-align: center;
+}
+/* Tab bar (All / Channel / 7TV / BTTV / FFZ / Twitch), between the grid
+   and the search box - same relative order as the official 7TV
+   extension's own emote menu. */
+.emote-picker-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px;
+  border-top: 1px solid #2c2c30;
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.emote-picker-tab {
+  background: none;
+  border: none;
+  color: #adadb8;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.emote-picker-tab:hover {
+  color: #efeff1;
+  background: rgba(255,255,255,0.06);
+}
+.emote-picker-tab.active {
+  color: var(--accent-fg, #fff);
+  background: var(--accent);
+}
+.emote-picker-search-wrap {
+  padding: 8px;
+  border-top: 1px solid #2c2c30;
+  flex-shrink: 0;
+}
+.emote-picker-search-input {
+  width: 100%;
+  background: #0e0e10;
+  border: 1px solid #53535f;
+  border-radius: 4px;
+  color: #efeff1;
+  font-size: 13px;
+  font-family: inherit;
+  padding: 7px 9px;
+  outline: none;
+  box-sizing: border-box;
+}
+.emote-picker-search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.emote-picker-search-input::placeholder {
+  color: #6d6d72;
+}
+/* @mention icon in user-suggestion popup rows */
+.user-mention-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent-text);
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+/* ── Chat links ──────────────────────────────────────────────── */
+.chat-link {
+  color: var(--accent-text);
+  text-decoration: underline;
+  /* Links can be long (tracking params, etc.) and chat is a narrow
+     320px column - without this a single long URL can force the
+     line wider than the pane instead of breaking. */
+  word-break: break-all;
+}
+.chat-link:hover {
+  color: var(--accent-text);
+}
+/* ── Link Preview Popup ─────────────────────────────────────── */
+.link-preview-popup {
+  /* top/left set dynamically in JS via getBoundingClientRect, same
+     pattern as .emote-autocomplete above. */
+  position: fixed;
+  width: 280px;
+  background: #18181b;
+  border: 1px solid #3a3a3d;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  overflow: hidden;
+  z-index: 9999; /* above everything, same as .emote-autocomplete */
+  /* Hover events come from a chat link; clicks should still go
+     straight through to whatever's under the popup (i.e. nothing
+     in this app reacts to clicking the preview itself), and the
+     popup briefly overlapping the cursor's path between two close
+     links shouldn't make it "stick" or intercept input. */
+  pointer-events: none;
+}
+.link-preview-image {
+  display: block;
+  width: 100%;
+  max-height: 140px;
+  object-fit: cover;
+  background: #000;
+}
+.link-preview-body {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.link-preview-site {
+  font-size: 11px;
+  font-weight: 600;
+  color: #adadb8;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.link-preview-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #efeff1;
+  /* Clamp to 2 lines rather than letting a long title blow out the
+     popup's height - -webkit-line-clamp is the standard way to do
+     this and is supported in WebView2/Chromium (what this app
+     actually runs on), even though it's nominally a -webkit-
+     prefixed property. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.link-preview-description {
+  font-size: 12px;
+  color: #adadb8;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ──────────────────────────────────────────────────────────────────── */
+
+/* ---- Document Picture-in-Picture mini-player ---------------------- */
+/* Rendered inside the Document PiP window (see enterDocPip in
+   playback-controls.js), which copies this whole stylesheet in - so
+   these rules ride along automatically. The controls bar overlays the
+   bottom of the video and fades in on hover, like the main player's. */
+
+.docpip-body {
+  margin: 0;
+  background: #000;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  position: relative;
+}
+
+.docpip-body video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.docpip-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.docpip-body:hover .docpip-controls {
+  opacity: 1;
+}
+
+.docpip-btn {
+  background: none;
+  border: none;
+  color: #efeff1;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+}
+
+.docpip-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Inherits the main .volume-slider look; only sizing differs in the
+   tighter bar. */
+.docpip-volume {
+  width: 90px;
+  /* Without this the range input renders with the browser's default
+   * accent (blue in Chromium) - the one control in the PiP windows that
+   * didn't pick up the theme. accent-color styles both the thumb and
+   * the filled part of the track, and applies to BOTH PiP variants:
+   * native pip.html links this stylesheet, and the doc-PiP window gets
+   * it via enterDocPip's rule-by-rule stylesheet copy. Same purple as
+   * every other accent in the app (var(--accent), Twitch's brand purple). */
+  accent-color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* Native PiP window (pip.html) - reuses the .docpip-* control styles
+ * above; these rules are only the page chrome around them. The <video>
+ * has pointer-events disabled so the stage's data-tauri-drag-region
+ * makes every un-buttoned pixel drag the frameless window, matching how
+ * OS PiP windows feel. Controls fade in on hover like the doc-pip bar. */
+.pip-body {
+  margin: 0;
+  background: #000;
+  overflow: hidden;
+  user-select: none;
+}
+.pip-stage {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+}
+.pip-stage video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  background: #000;
+}
+.pip-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.pip-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.pip-stage:hover .pip-controls,
+.pip-stage:hover .pip-close {
+  opacity: 1;
+}
+
+.pip-vol-bubble {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  background: #18181b;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: #efeff1;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 6px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ── Platform toggle (Twitch <-> Kick), right of the nav tabs ─────────
+   One button, two states. The BORDER is the state indicator per the
+   design: Twitch purple by default, Kick green when Kick mode is on -
+   the label text flips with it (main.js's applyPlatformUi). A pill
+   rather than another underlined tab so it reads as a mode switch, not
+   a third page. */
+.platform-toggle {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 4px 14px;
+  margin-left: 10px;
+  cursor: pointer;
+  background: none;
+  border-radius: 999px;
+  border: 2px solid var(--accent); /* Twitch purple - the default state */
+  color: #efeff1;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.platform-toggle:hover {
+  filter: brightness(1.2);
+}
+.platform-toggle.platform-kick {
+  border-color: #53fc18; /* Kick green */
+}
+
+/* ── Kick login button ───────────────────────────────────────────────
+   Same shape as the Twitch #login-btn (see rules ~277 and ~400), tinted
+   Kick-green. Shown only in Kick mode by applyPlatformUi(). */
+header #kick-login-btn {
+  /* margin-left: auto, not a fixed 8px - the Twitch #login-btn (rule
+     ~400) pushes itself to the header's right edge the same way, and
+     only one of the two login buttons is ever visible at a time, so the
+     Kick username lands in the exact spot the Twitch one occupies. */
+  margin-left: auto;
+  border-radius: 999px;
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid #3a3a3d;
+  color: #efeff1;
+  font: inherit;
+  cursor: pointer;
+}
+header #kick-login-btn:hover {
+  background: #2c2c30;
+}
+header #kick-login-btn.logged-in {
+  border-color: #53fc18;
+  background: rgba(83, 252, 24, 0.12);
+}
+header #kick-login-btn.logged-in:hover {
+  background: rgba(83, 252, 24, 0.22);
+  border-color: #7dff53;
+}
+
+/* ── Kick mode: readable text on green fills ─────────────────────────
+   The accent variables above recolor every purple surface to Kick
+   green, but white text on #53fc18 is unreadable - Kick's own brand
+   pairs its green with near-black. These are exactly the elements whose
+   BACKGROUND is the accent color; transparent-background header
+   controls (nav tabs, platform toggle, kick login pill) keep their
+   light text and are deliberately absent here. */
+body.kick-mode header .channel-launcher #watch-btn,
+body.kick-mode .back-to-stream-btn,
+body.kick-mode .deps-banner-install-btn,
+body.kick-mode .channel-info-follow-btn,
+body.kick-mode .channel-info-tag.channel-info-drops-tag,
+body.kick-mode .browse-pill,
+body.kick-mode .home-drops-badge,
+body.kick-mode .user-card-timeout-preset:hover:not(:disabled) {
+  color: var(--accent-fg);
+}
+
+/* ── Channel info bar: Kick additions ────────────────────────────────
+   Verified checkmark next to the name and the accent-filled category
+   pill, both introduced by updateKickChannelInfoBar (main.js). Colors
+   ride the platform accent variables, so these are Kick green in Kick
+   mode and would be Twitch purple if the Twitch bar ever used them. */
+.channel-info-verified {
+  color: var(--accent);
+  font-weight: 800;
+  margin-left: 6px;
+  font-size: 0.95em;
+}
+.channel-info-tag.channel-info-category-tag {
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 700;
+}
+
+/* ── Follow button: in-app "Following" state (Kick mode) ─────────────
+   On Kick the Follow button is a real local toggle (kick-follows.js) -
+   the followed state renders hollow (accent outline) so Follow ->
+   Following reads as a state change, matching how kick.com and
+   twitch.tv both restyle their followed state. Twitch mode never adds
+   this class (its button is a plain link-out). */
+.channel-info-follow-btn.is-following,
+body.kick-mode .channel-info-follow-btn.is-following {
+  /* Second selector out-specifies the kick-mode dark-text-on-accent
+     rule above (which would otherwise win the color war and paint this
+     near-black on a transparent background). */
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
+/* ── "Link Kick" alias control (Twitch info bar) ─────────────────────
+   The button reuses .channel-info-videos-btn's look; these are only
+   the linked-state tint and the inline editor that swaps in on click
+   (see the channelInfoKickAliasBtn handler in main.js). */
+.channel-info-kick-alias-btn.has-alias {
+  color: #53fc18; /* literal Kick green: it denotes the KICK side even while the app is in Twitch (purple) mode */
+  border-color: rgba(83, 252, 24, 0.5);
+}
+.channel-info-alias-input {
+  background: #18181b;
+  border: 1px solid #53fc18;
+  border-radius: 4px;
+  color: #efeff1;
+  font-size: 12px;
+  padding: 3px 8px;
+  width: 150px;
+  outline: none;
+}

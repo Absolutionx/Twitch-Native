@@ -1,0 +1,66 @@
+[package]
+name = "twitch-native"
+version = "2.0.0"
+description = "Twitch native player PoC"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# "devtools" feature: without it, Tauri compiles the WebView2 inspector
+# (right-click -> Inspect Element, or Ctrl+Shift+I) out of the binary
+# entirely, in both debug AND release builds - it's not a debug-vs-release
+# distinction the way it is for some other frameworks. Without this flag,
+# right-clicking the webview shows the bare WebView2 context menu (Back/
+# Refresh/Save as/Print/More tools) with no Inspect option at all, which
+# is what was happening before this was added.
+tauri = { version = "2", features = ["devtools", "tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+getrandom = "0.2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync", "process"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+# Explicit dependency + feature needed because rustls 0.23+ requires a
+# CryptoProvider to be installed before any TLS connection, and won't pick
+# one automatically if both 'aws-lc-rs' and 'ring' are ambiguous/absent in
+# the dependency graph. We install the ring provider explicitly in main()
+# at startup - see the install_default() call there.
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "tls12", "std"] }
+# Used only for the one-off OAuth token validation GET request
+# (id.twitch.tv/oauth2/validate). default-features = false + rustls-tls
+# avoids pulling in a second TLS stack (native-tls/OpenSSL) alongside the
+# rustls we already depend on for the chat WebSocket - same reasoning as
+# the windows-core version-pinning above: two different TLS implementations
+# in the dependency graph is extra binary size and surface area for no
+# benefit here.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+# Used solely so the drops banner's "Watch on Twitch" link can open in the
+# user's actual default browser - a plain <a target="_blank"> does nothing
+# in a Tauri webview (there's no second tab to open into; Tauri blocks that
+# navigation by default), so opening external URLs needs this plugin's
+# JS-side openUrl() instead. See drops-banner-link wiring in main.js.
+tauri-plugin-opener = "2"
+# Native OS desktop notifications, used for "a followed channel you've
+# opted into notifications for just went live" (see sidebar.js's
+# go-live-notification diffing and notify.rs). JS-side
+# isPermissionGranted()/requestPermission()/sendNotification() come from
+# the matching @tauri-apps/plugin-notification npm package.
+tauri-plugin-notification = "2"
+# Without this, every double-click of the .exe (Start Menu, desktop
+# shortcut, taskbar icon - anything that isn't clicking the existing tray
+# icon) launches a brand-new, fully independent process with its own
+# window and its own tray icon, since nothing here was ever telling
+# Windows "an instance is already running, just focus it." See the plugin
+# registration in main.rs's tauri::Builder chain (must be the very first
+# .plugin() call, per the plugin's own docs, so it runs before anything
+# else can spawn windows/tray icons for what turns out to be a second
+# instance).
+tauri-plugin-single-instance = "2"
+
+[dependencies.time]
+version = "=0.3.49"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
