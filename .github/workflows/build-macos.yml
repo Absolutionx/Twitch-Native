@@ -1,0 +1,115 @@
+# Builds the macOS .dmg on GitHub-hosted macOS runners.
+#
+# WHY CI RATHER THAN A LOCAL BUILD: a Tauri app links against WebKit and
+# Apple system frameworks that exist only on macOS, so it cannot be
+# cross-compiled from Windows or Linux. A GitHub macOS runner IS a Mac, so
+# it can produce the .dmg even though the developer is on Windows.
+#
+# WHAT THIS DOES NOT DO: sign or notarize. The output is an UNSIGNED .dmg.
+# On the tester's Mac, Gatekeeper will refuse a normal double-click; they
+# open it once via right-click -> Open (or System Settings -> Privacy &
+# Security -> "Open Anyway"), after which it launches normally. That's
+# expected for an unsigned personal build - see the notes at the bottom for
+# what signing would require.
+
+name: Build macOS
+
+on:
+  # Manual runs from the Actions tab - the normal way to use this.
+  workflow_dispatch: {}
+  # And automatically for release tags.
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-macos:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      # Don't let an Intel failure cancel the Apple Silicon build (or vice
+      # versa) - one working .dmg is still worth having.
+      fail-fast: false
+      matrix:
+        include:
+          # macos-14 runners are Apple Silicon (M-series). This is what
+          # almost every current Mac needs.
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            label: Apple Silicon (arm64)
+          # macos-13 runners are Intel. Only needed for pre-2020 Macs.
+          - runner: macos-13
+            target: x86_64-apple-darwin
+            label: Intel (x86_64)
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Rust builds dominate the runtime here; without a cache every run
+      # recompiles the whole dependency tree (~10-15 min).
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      # npm ci (not install) so the build matches package-lock.json exactly.
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # NOTE: streamlink and ffmpeg are RUNTIME dependencies that the end
+      # user installs (the app shells out to them - see deps_check.rs).
+      # They are not needed to BUILD, so they're deliberately not installed
+      # here. The tester runs: brew install streamlink ffmpeg
+
+      - name: Build the .app and .dmg
+        run: npm run tauri build -- --target ${{ matrix.target }}
+        env:
+          # Explicitly unsigned: without this Tauri may try to find a
+          # signing identity in the keychain and fail the build when there
+          # isn't one.
+          APPLE_SIGNING_IDENTITY: ""
+
+      - name: Upload the .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: TwitchNative-macos-${{ matrix.target }}
+          # Glob so the version in the filename doesn't have to be hardcoded.
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      # Fallback: if the .dmg step fails (dmg packaging is the most
+      # fragile part of a macOS bundle), the raw .app is still useful -
+      # it can be zipped and run directly.
+      - name: Upload the .app as a fallback
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TwitchNative-macos-${{ matrix.target }}-app
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
+          if-no-files-found: ignore
+
+# ─────────────────────────────────────────────────────────────────────────
+# If you ever want a SIGNED + NOTARIZED build (so testers can just
+# double-click, with no right-click-Open step), you need a paid Apple
+# Developer account and these repository secrets, which Tauri reads:
+#   APPLE_CERTIFICATE            base64 of your Developer ID .p12
+#   APPLE_CERTIFICATE_PASSWORD
+#   APPLE_SIGNING_IDENTITY       e.g. "Developer ID Application: Name (TEAMID)"
+#   APPLE_ID                     your Apple ID email
+#   APPLE_PASSWORD               an app-specific password
+#   APPLE_TEAM_ID
+# For a personal build a friend is testing, unsigned is fine - skip all this.
