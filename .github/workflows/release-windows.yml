@@ -1,0 +1,82 @@
+# Builds the Windows installer, signs it for the auto-updater, and
+# publishes a GitHub Release with the latest.json the app checks against.
+#
+# HOW THE AUTO-UPDATER FLOW WORKS END TO END:
+#   1. You bump "version" in src-tauri/tauri.conf.json and push a tag (or
+#      run this manually). The version MUST be higher than what users have,
+#      or the app won't see it as an update.
+#   2. This workflow builds the NSIS installer and signs it with your
+#      updater PRIVATE key (from repo secrets).
+#   3. tauri-action creates a GitHub Release and uploads the installer, its
+#      .sig signature, and a generated latest.json.
+#   4. Users' apps fetch latest.json from the "releases/latest" URL (set in
+#      tauri.conf.json), see the higher version, verify the signature with
+#      the baked-in PUBLIC key, and show the in-app Update button.
+#
+# ONE-TIME SETUP BEFORE THIS WORKS (see UPDATER_SETUP.md):
+#   - Generate a keypair:  npx tauri signer generate -w ~/.tauri/tn.key
+#   - Put the PUBLIC key into tauri.conf.json  ->  plugins.updater.pubkey
+#   - Add repo secrets:
+#       TAURI_SIGNING_PRIVATE_KEY           (contents of the private key file)
+#       TAURI_SIGNING_PRIVATE_KEY_PASSWORD  (the password you set, or empty)
+#   These are the updater's OWN signature (free), NOT Windows code-signing.
+ 
+name: Release Windows
+ 
+on:
+  # Tag push like v2.1.0 is the normal trigger.
+  push:
+    tags:
+      - "v*"
+  # Manual trigger for testing from the Actions tab.
+  workflow_dispatch: {}
+ 
+jobs:
+  release-windows:
+    runs-on: windows-latest
+ 
+    permissions:
+      # tauri-action needs this to create the Release and upload assets.
+      contents: write
+ 
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v5
+ 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+ 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+ 
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: npm
+ 
+      - name: Install frontend dependencies
+        run: npm ci
+ 
+      - name: Build, sign, and publish the release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The updater signing keypair. Without these the build fails,
+          # because tauri.conf.json has createUpdaterArtifacts + a pubkey,
+          # so it expects to sign. See the setup notes at the top.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          # tagName/​releaseName use the pushed tag. __VERSION__ is filled by
+          # tauri-action from tauri.conf.json's version.
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'app-v__VERSION__' }}
+          releaseName: "Twitch Native v__VERSION__"
+          releaseBody: "Automated release. The app will offer this as an in-app update on Windows."
+          releaseDraft: false
+          prerelease: false
+          # Only the Windows target; this is the Windows updater channel.
+          args: --target x86_64-pc-windows-msvc
+ 
