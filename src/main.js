@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { TwitchChat } from "./chat.js";
 import { PlaybackControls } from "./playback-controls.js";
@@ -553,6 +554,13 @@ checkStreamDeps();
 // Windows-only in practice (the check no-ops on other platforms). Fires
 // once at startup; shows the update banner if a newer release exists.
 checkForUpdate();
+
+// Show the running app version in the window title, so which build is
+// live is visible at a glance (handy for verifying an update actually
+// applied). getVersion() reads the version baked in from tauri.conf.json.
+getVersion()
+  .then((v) => appWindow.setTitle(`Twitch Native v${v}`))
+  .catch(() => {}); // non-fatal: title just stays the static default
 setInterval(maybeSaveVodProgress, 15_000);
 
 // DEBUG/TESTING ONLY - lets you trigger a real go-live notification from
