@@ -736,6 +736,88 @@ header #login-btn.logged-in { border-radius: 999px; }
   color: #efeff1;
 }
 
+/* Update banner — same layout as the deps banner but accent-colored
+   (informational, not an error) and it sits above the app on its own
+   fixed strip. Appended to #app by update-banner.js. */
+.update-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  min-height: 38px;
+  z-index: 501;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  background: #241a33;
+  border-bottom: 1px solid var(--accent);
+  color: #efeff1;
+  font-size: 13px;
+}
+.update-banner-text {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  line-height: 1.4;
+}
+.update-banner-version {
+  color: #bf94ff;
+}
+.update-banner-progress {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.update-banner-progress-bar {
+  height: 6px;
+  width: 0%;
+  min-width: 6px;
+  max-width: 240px;
+  flex: 1;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+.update-banner-progress-label {
+  color: #bf94ff;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.update-banner-btn {
+  background: var(--accent);
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.update-banner-btn:hover {
+  background: #7c2fe0;
+}
+.update-banner-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.update-banner-dismiss {
+  background: none;
+  border: none;
+  color: #b79fdb;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.update-banner-dismiss:hover {
+  color: #efeff1;
+}
+
 /*
   Fills the leftover space below #video-frame (see the HTML comment
   on #channel-info-bar for the full why). Only ever shown while NOT

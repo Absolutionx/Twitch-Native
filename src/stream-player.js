@@ -256,11 +256,40 @@ export function attachMseStream(videoEl, relayUrl, callbacks = {}) {
   // removeAttribute + load() puts the element into a clean HAVE_NOTHING
   // state (clears videoEl.error, drains the decoder) before the new src.
   videoEl.removeAttribute("src");
+  // Clear any prior <source> children from a previous ManagedMediaSource
+  // attachment (see below) so they don't stack up across re-attaches.
+  while (videoEl.firstChild) videoEl.removeChild(videoEl.firstChild);
   videoEl.load();
 
-  const mediaSource = new MediaSource();
+  // Pick the MediaSource implementation.
+  //
+  // THIS IS THE macOS BLACK-SCREEN FIX. macOS uses WKWebView (Safari's
+  // engine), and WebKit's classic `MediaSource` is unreliable there: it
+  // often accepts a SourceBuffer and a few appends, then fails to decode
+  // and throws InvalidStateError + MEDIA_ERR_DECODE - exactly the observed
+  // failure. WebKit's actually-working MSE path is `ManagedMediaSource`
+  // (Safari 17+). Chromium (WebView2 on Windows) has no ManagedMediaSource
+  // and its classic MediaSource works fine, so we feature-detect and use
+  // whichever exists, preferring Managed when present.
+  const MediaSourceImpl = window.ManagedMediaSource || window.MediaSource;
+  const usingManaged = MediaSourceImpl === window.ManagedMediaSource;
+  const mediaSource = new MediaSourceImpl();
   const objectUrl = URL.createObjectURL(mediaSource);
-  videoEl.src = objectUrl;
+
+  if (usingManaged) {
+    // ManagedMediaSource ONLY activates (fires sourceopen) when remote
+    // playback is disabled or an AirPlay alternative exists - otherwise it
+    // silently never opens. Disable remote playback to satisfy that, and
+    // attach via a <source> child rather than videoEl.src, which is the
+    // form WebKit's ManagedMediaSource expects.
+    videoEl.disableRemotePlayback = true;
+    const sourceEl = document.createElement("source");
+    sourceEl.type = "video/mp4";
+    sourceEl.src = objectUrl;
+    videoEl.appendChild(sourceEl);
+  } else {
+    videoEl.src = objectUrl;
+  }
 
   // Queue of Uint8Array chunks waiting to be appended. appendBuffer()
   // can't be called again while the SourceBuffer is still "updating"
@@ -269,6 +298,20 @@ export function attachMseStream(videoEl, relayUrl, callbacks = {}) {
   // without this queue, calling appendBuffer() while already updating
   // throws InvalidStateError and silently drops that chunk's data.
   const pendingChunks = [];
+  // Consecutive InvalidStateError retries on the current head chunk. WKWebView
+  // can throw InvalidStateError on an append Chromium would accept; we retry
+  // rather than drop (dropping causes a decode-fatal gap - see pumpQueue),
+  // but cap the retries so a genuinely wedged SourceBuffer surfaces the
+  // failure instead of spinning forever.
+  let _invalidStateRetries = 0;
+  const MAX_INVALID_STATE_RETRIES = 20;
+  // ManagedMediaSource streaming gate. True = the managed source currently
+  // permits appends (between startstreaming and endstreaming). Starts true
+  // so the classic-MediaSource path, which ignores this entirely, behaves
+  // exactly as before. For the managed path, the startstreaming event sets
+  // it true and re-drives pumpQueue; endstreaming sets it false and we
+  // simply stop appending (chunks stay queued) until streaming resumes.
+  let _mmsStreaming = true;
   let sourceBuffer = null;
   let stopped = false;
   let abortController = new AbortController();
@@ -360,10 +403,26 @@ export function attachMseStream(videoEl, relayUrl, callbacks = {}) {
    * ('updateend') and every time a new chunk is enqueued. */
   function pumpQueue() {
     if (stopped || !sourceBuffer || sourceBuffer.updating) return;
+    // ManagedMediaSource (WebKit/macOS) only permits appendBuffer while it
+    // is actively "streaming". Appending outside that window is rejected
+    // with InvalidStateError, which poisons the buffer and causes
+    // MEDIA_ERR_DECODE - the macOS black screen. Unlike classic
+    // MediaSource (Chromium/Windows), where you may append any time the
+    // buffer isn't updating, here we must wait for the startstreaming
+    // event. When streaming pauses, chunks stay queued and the
+    // startstreaming handler re-drives this pump. `_mmsStreaming` starts
+    // true so the non-managed path (where it's irrelevant) is unaffected.
+    // Prefer the live `streaming` property if the implementation exposes
+    // it (most reliable); fall back to the event-tracked flag otherwise.
+    const canAppend = typeof mediaSource.streaming === "boolean"
+      ? mediaSource.streaming
+      : _mmsStreaming;
+    if (usingManaged && !canAppend) return;
     if (pendingChunks.length === 0) return;
     const chunk = pendingChunks.shift();
     try {
       sourceBuffer.appendBuffer(chunk);
+      _invalidStateRetries = 0; // success clears the WKWebView retry counter
       if (_bytesAppended === 0) _firstAppendAt = performance.now();
       _bytesAppended += chunk.byteLength;
       console.log("[stream-player] appendBuffer called with", chunk.byteLength, "bytes, queue remaining:", pendingChunks.length);
@@ -377,6 +436,43 @@ export function attachMseStream(videoEl, relayUrl, callbacks = {}) {
         // point the buffer should have room for the chunk.
         pendingChunks.unshift(chunk);
         emergencyTrim();
+      } else if (err.name === "InvalidStateError") {
+        // WKWebView (Safari's engine, used on macOS - NOT Chromium like
+        // Windows' WebView2) is far stricter about SourceBuffer state than
+        // Chromium, and intermittently throws InvalidStateError on an
+        // append that Chromium would accept - e.g. a microscopic window
+        // where readyState flips or an updateend hasn't fully settled.
+        //
+        // The OLD code fell through to the else branch below and DROPPED
+        // the chunk. That was the actual macOS black-screen cause: a
+        // dropped chunk leaves a gap in the byte stream, and the decoder
+        // throws MEDIA_ERR_DECODE on the very next append, which is fatal
+        // and triggers the relay restart - producing exactly the observed
+        // "appendBuffer ok, then InvalidStateError, then MEDIA_ERR_DECODE,
+        // then auto-restart" loop that showed video as a black screen.
+        //
+        // Instead: keep the chunk (put it back at the front) and retry it
+        // on the next pump. If the SourceBuffer is genuinely fine, the
+        // updateend from the previous op - or the microtask below - drives
+        // the retry; the byte stream stays contiguous so the decoder never
+        // sees a gap.
+        pendingChunks.unshift(chunk);
+        _invalidStateRetries += 1;
+        if (_invalidStateRetries > MAX_INVALID_STATE_RETRIES) {
+          // Genuinely wedged - stop retrying so this surfaces as a real
+          // failure (and the relay-restart path can try a clean re-attach)
+          // instead of an invisible infinite spin holding the same chunk.
+          _invalidStateRetries = 0;
+          pendingChunks.shift(); // drop the wedged head; we're giving up on it
+          if (!stopped) console.error("appendBuffer InvalidStateError exceeded retries; dropping chunk");
+        } else if (!sourceBuffer.updating) {
+          // Nothing will fire updateend to re-drive the queue, so nudge it
+          // ourselves on the next microtask (giving WebKit's state a beat
+          // to settle) rather than stalling forever.
+          queueMicrotask(() => {
+            if (!stopped) pumpQueue();
+          });
+        }
       } else {
         if (!stopped) console.error("appendBuffer failed, dropping chunk:", err);
       }
@@ -830,6 +926,38 @@ export function attachMseStream(videoEl, relayUrl, callbacks = {}) {
       return false;
     }
     console.log("[stream-player] MSE attached with codec:", mimeType);
+    // Diagnostics for the "video stays black even though bytes flow" case,
+    // which on macOS (WKWebView, not Chromium) most often means the webview
+    // accepted the SourceBuffer but can't actually DECODE the codec - Safari/
+    // WKWebView's MSE codec support is narrower than Chromium's, and AV1 in
+    // particular is unsupported on older Macs. isTypeSupported can even
+    // return true while decode still fails, so we also check for real frames.
+    try {
+      console.log(
+        "[stream-player] isTypeSupported:", MediaSource.isTypeSupported(mimeType),
+      );
+    } catch {}
+    setTimeout(() => {
+      if (stopped) return;
+      // videoWidth stays 0 until at least one frame has actually decoded.
+      // readyState >= 2 (HAVE_CURRENT_DATA) means a frame is available.
+      // Both zero here, with data buffered, = decoder isn't producing frames
+      // (the black-screen signature) rather than a starvation/network issue.
+      console.log(
+        "[stream-player] decode check:",
+        "videoWidth =", videoEl.videoWidth,
+        "| videoHeight =", videoEl.videoHeight,
+        "| readyState =", videoEl.readyState,
+        "| buffered ranges =", videoEl.buffered.length,
+        "| codec =", mimeType,
+      );
+      if (videoEl.videoWidth === 0 && videoEl.buffered.length > 0) {
+        console.error(
+          "[stream-player] BLACK-SCREEN SIGNATURE: data is buffered but no frame decoded. " +
+          "This webview likely cannot decode this codec (" + mimeType + ").",
+        );
+      }
+    }, 5000);
     sourceBuffer.addEventListener("updateend", () => {
       if (stopped) return; // in-flight operation completed after stop() — ignore
       startPlaybackOnceBuffered();
@@ -884,6 +1012,20 @@ export function attachMseStream(videoEl, relayUrl, callbacks = {}) {
   mediaSource.addEventListener("sourceclose", () => {
     console.log("[stream-player] mediaSource sourceclose");
   });
+
+  if (usingManaged) {
+    // See _mmsStreaming: gate appends on the managed source's streaming
+    // window. When it starts streaming, resume draining the queue; when it
+    // stops, hold. Without this, appends outside the window throw
+    // InvalidStateError on WebKit and black-screen the stream.
+    mediaSource.addEventListener("startstreaming", () => {
+      _mmsStreaming = true;
+      if (!stopped) pumpQueue();
+    });
+    mediaSource.addEventListener("endstreaming", () => {
+      _mmsStreaming = false;
+    });
+  }
 
   mediaSource.addEventListener("sourceopen", () => {
     if (stopped) return;

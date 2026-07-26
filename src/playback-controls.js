@@ -440,6 +440,12 @@ export class PlaybackControls {
    */
   start(channel, url, quality = "best", vodTotalSeconds = 0, startPositionSecs = 0, opts = {}) {
     const kickVod = Boolean(opts.kickVod);
+    // macOS native-HLS live path (see attachStream): live m3u8 via hls.js
+    // instead of the MSE relay, but all the control/UI setup start() does
+    // is identical, which is exactly why the native-HLS branch must go
+    // through start() and not around it (skipping start() was what left
+    // PiP, the hover overlay, and the cursor auto-hide uninitialized).
+    this._nativeHlsLive = Boolean(opts.nativeHlsLive);
     this.active = true;
     // Clear the quality cache when switching to a different channel so the
     // new channel gets its own fresh probe. Keep it for same-channel calls
@@ -527,7 +533,29 @@ export class PlaybackControls {
     // be torn down server-side) - close it; the user can re-open on the
     // new source with one click.
     this._closeNativePip();
-    if (this.isVod) {
+    if (this._nativeHlsLive) {
+      // macOS native-HLS live path: a real live m3u8 played via hls.js /
+      // native HLS instead of the MSE relay. Live-edge buffering, no
+      // MSE controller. See attachHlsLive / the useNativeHlsForLive
+      // toggle in main.js. Everything else start() sets up (controls,
+      // PiP, hover overlay, poller, quality menu) is identical.
+      if (this.mseController) {
+        this.mseController.stop();
+        this.mseController = null;
+      }
+      if (this._hlsVod) {
+        this._hlsVod.destroy();
+        this._hlsVod = null;
+      }
+      this._hlsVod = attachHlsVod(this.videoEl, url, {
+        startPosition: -1,
+        liveEdge: true,
+        onFatalError: (data) => {
+          console.error("[hls.js] fatal in live:", data);
+          this.onStreamDead?.("hls.js live pipeline failed");
+        },
+      });
+    } else if (this.isVod) {
       // Tear down any existing HLS.js instance first.
       if (this._hlsVod) {
         this._hlsVod.destroy();

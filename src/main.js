@@ -18,6 +18,7 @@ import { session } from "./session.js";
 import { rememberSession, forgetSession, restoreSession } from "./session-restore.js";
 import { formatViewerCount } from "./format.js";
 import { checkStreamDeps } from "./deps-banner.js";
+import { checkForUpdate } from "./update-banner.js";
 import { updateDropsBanner, hideDropsBanner, resetDropsDismissal } from "./drops-banner.js";
 import {
   initLayout, switchPage, updateBackToStreamBtn, setTheaterMode,
@@ -549,6 +550,9 @@ sidebar.init();
 // page (its Videos button), and write the status line - all app-shell
 // concerns it can't import without a cycle, so they're handed to it here.
 checkStreamDeps();
+// Windows-only in practice (the check no-ops on other platforms). Fires
+// once at startup; shows the update banner if a newer release exists.
+checkForUpdate();
 setInterval(maybeSaveVodProgress, 15_000);
 
 // DEBUG/TESTING ONLY - lets you trigger a real go-live notification from
@@ -1150,9 +1154,28 @@ async function restartStreamWithQuality(quality, { auto = false } = {}) {
       console.error("Failed to switch VOD quality:", err);
       setStatus(`Error switching quality: ${err}`);
     }
+  } else if (session.useNativeHlsForLive) {
+    // macOS native-HLS live: switch quality by resolving a fresh ad-free
+    // m3u8 at the new quality and reattaching via hls.js - the live
+    // counterpart of the VOD quality-switch above. No start_stream (that's
+    // the MSE relay path, which isn't used here).
+    const restartChannel = session.intendedChannel;
+    try {
+      const m3u8Url = await invoke("get_live_m3u8_url", { channel: restartChannel, quality });
+      if (session.intendedChannel !== restartChannel) return;
+      playbackControls.start(restartChannel, m3u8Url, quality, 0, 0, { nativeHlsLive: true });
+      if (session.kickFailover) {
+        invoke("stop_kick_chat").catch(() => {});
+        session.kickFailover = null;
+        await chat.connect(restartChannel).catch(() => {});
+      }
+    } catch (err) {
+      if (String(err).includes("superseded")) return;
+      console.error("Failed to switch live quality (native HLS):", err);
+      setStatus(`Error switching quality: ${err}`);
+    }
   } else {
     try {
-      // start_stream stops the previous relay before starting the new one
       // (see its Rust doc comment), which kills streamlink and EOFs the
       // body the CURRENT attachment is still reading from - and that
       // attachment isn't replaced until playbackControls.start() below,
@@ -1453,6 +1476,75 @@ async function watchChannel(channel, stream) {
     // them one by one before reaching the last click. The Helix lookup
     // above is already guarded; this covers the far more expensive step.
     if (session.intendedChannel !== channel) return;
+
+    // ── macOS native-HLS path ────────────────────────────────────────
+    // On macOS (WebKit), the fMP4 byte-relay + MSE pipeline is unreliable
+    // (see stream-player.js). Instead, resolve the channel's ad-free m3u8
+    // (streamlink --twitch-disable-ads still strips ads) and play it via
+    // hls.js / native HLS through attachHlsDvr - the same path Kick live
+    // and live-DVR already use, which works on WebKit. Windows keeps the
+    // byte-relay path (useNativeHlsForLive is false there), preserving its
+    // stronger mid-stream ad splicing.
+    //
+    // session.useNativeHlsForLive is a runtime toggle (defaults on for
+    // macOS, off elsewhere) so both approaches can be compared without a
+    // rebuild - see its initialization near startup.
+    if (session.useNativeHlsForLive) {
+      try {
+        setStatus(`Resolving ${channel}…`);
+        const m3u8Url = await invoke("get_live_m3u8_url", {
+          channel,
+          quality: session.currentQuality,
+        });
+        if (session.intendedChannel !== channel) return;
+        session.playing = true;
+        rememberSession({ kind: "twitchLive", id: channel });
+        session.liveDvrInfo = null;
+        session.liveDvrM3u8Cache = null;
+        playbackControls.liveDvrStreamStartedAt = null;
+        syncWatchBtn();
+        setStatus(`Playing: ${channel}`);
+        videoPlaceholder.style.display = "none";
+        // Go through start() (NOT attachHlsLive directly) so every control
+        // it sets up - PiP button, hover overlay, cursor auto-hide, seek
+        // bar, quality menu, progress poller - is initialized. The
+        // nativeHlsLive opt just swaps the MSE attach for hls.js inside
+        // attachStream; everything else is the normal live setup.
+        playbackControls.start(channel, m3u8Url, session.currentQuality, 0, 0, { nativeHlsLive: true });
+        updateBackToStreamBtn();
+        resyncChannelInfoBarVisibility();
+
+        // Same background live-DVR + info-bar refresh the MSE path sets up,
+        // so DVR seeking and the viewer count work here too.
+        invoke("get_live_vod_info", { login: channel })
+          .then((raw) => {
+            const info = JSON.parse(raw);
+            if (session.intendedChannel === channel && info?.video_id && info?.created_at) {
+              session.liveDvrInfo = {
+                videoId: info.video_id,
+                streamStartedAt: new Date(info.created_at).getTime(),
+              };
+              playbackControls.liveDvrStreamStartedAt = session.liveDvrInfo.streamStartedAt;
+              prefetchLiveDvrM3u8();
+            }
+          })
+          .catch(() => {});
+        startChannelInfoRefresh(
+          channel,
+          () => session.playing && playbackControls.currentChannel === channel,
+        );
+        return;
+      } catch (err) {
+        if (String(err).includes("superseded")) return;
+        if (session.intendedChannel !== channel) return;
+        console.error("[native-hls] failed to start live:", err);
+        setStatus(`Couldn't play ${channel}: ${err}`);
+        videoPlaceholder.textContent = `Couldn't play ${channel}: ${err}`;
+        videoPlaceholder.style.display = "flex";
+        return;
+      }
+    }
+    // ── Default (Windows) byte-relay + MSE path ──────────────────────
     const relayUrl = await invoke("start_stream", { channel, quality: session.currentQuality, lowLatency: session.lowLatency });
     // And again after: the spawn itself took real time, and the user may
     // have switched during it - don't ATTACH a superseded stream. We
@@ -2081,6 +2173,34 @@ listen("kick-oauth-result", (event) => {
 })();
 
 applyPlatformUi();
+
+// ── macOS native-HLS toggle ──────────────────────────────────────────
+// Whether Twitch LIVE plays via native HLS / hls.js (get_live_m3u8_url +
+// attachHlsDvr) instead of the fMP4 byte-relay + MSE pipeline. Defaults ON
+// for macOS, where WebKit's MSE is unreliable (see stream-player.js), and
+// OFF elsewhere, where the byte-relay works and gives stronger mid-stream
+// ad splicing.
+//
+// Exposed on window so both approaches can be A/B tested from the devtools
+// console WITHOUT a rebuild:
+//   __setNativeHls(true)   force native HLS
+//   __setNativeHls(false)  force the byte-relay + MSE path
+// Change it, then reopen the stream to apply.
+{
+  const isMac = /Mac|iPhone|iPad/i.test(navigator.platform)
+    || /Mac OS X/i.test(navigator.userAgent);
+  session.useNativeHlsForLive = isMac;
+  window.__setNativeHls = (on) => {
+    session.useNativeHlsForLive = Boolean(on);
+    console.log(
+      `[native-hls] live playback path = ${session.useNativeHlsForLive ? "NATIVE HLS (hls.js)" : "byte-relay + MSE"}. Reopen the stream to apply.`,
+    );
+    return session.useNativeHlsForLive;
+  };
+  console.log(
+    `[native-hls] default live path on this platform = ${session.useNativeHlsForLive ? "NATIVE HLS (hls.js)" : "byte-relay + MSE"} (toggle with __setNativeHls(true|false))`,
+  );
+}
 
 /** Keeps the Watch/Stop button label in sync with playback state. */
 function syncWatchBtn() {
