@@ -1,55 +1,62 @@
-# Builds the Windows installer, signs it for the auto-updater, and
-# publishes a GitHub Release with the latest.json the app checks against.
+# Builds the macOS .dmg on GitHub-hosted macOS runners.
 #
-# HOW THE AUTO-UPDATER FLOW WORKS END TO END:
-#   1. You bump "version" in src-tauri/tauri.conf.json and push a tag (or
-#      run this manually). The version MUST be higher than what users have,
-#      or the app won't see it as an update.
-#   2. This workflow builds the NSIS installer and signs it with your
-#      updater PRIVATE key (from repo secrets).
-#   3. tauri-action creates a GitHub Release and uploads the installer, its
-#      .sig signature, and a generated latest.json.
-#   4. Users' apps fetch latest.json from the "releases/latest" URL (set in
-#      tauri.conf.json), see the higher version, verify the signature with
-#      the baked-in PUBLIC key, and show the in-app Update button.
+# WHY CI RATHER THAN A LOCAL BUILD: a Tauri app links against WebKit and
+# Apple system frameworks that exist only on macOS, so it cannot be
+# cross-compiled from Windows or Linux. A GitHub macOS runner IS a Mac, so
+# it can produce the .dmg even though the developer is on Windows.
 #
-# ONE-TIME SETUP BEFORE THIS WORKS (see UPDATER_SETUP.md):
-#   - Generate a keypair:  npx tauri signer generate -w ~/.tauri/tn.key
-#   - Put the PUBLIC key into tauri.conf.json  ->  plugins.updater.pubkey
-#   - Add repo secrets:
-#       TAURI_SIGNING_PRIVATE_KEY           (contents of the private key file)
-#       TAURI_SIGNING_PRIVATE_KEY_PASSWORD  (the password you set, or empty)
-#   These are the updater's OWN signature (free), NOT Windows code-signing.
+# WHAT THIS DOES NOT DO: sign or notarize. The output is an UNSIGNED .dmg.
+# On the tester's Mac, Gatekeeper will refuse a normal double-click; they
+# open it once via right-click -> Open (or System Settings -> Privacy &
+# Security -> "Open Anyway"), after which it launches normally. That's
+# expected for an unsigned personal build - see the notes at the bottom for
+# what signing would require.
 
-name: Release Windows
+name: Build macOS
 
 on:
-  # Tag push like v2.1.0 is the normal trigger.
-  push:
-    tags:
-      - "v*"
-  # Manual trigger for testing from the Actions tab.
+  # Manual-only. The automatic tag trigger was removed so publishing a
+  # release builds Windows ONLY (see release-windows.yml). Run this by hand
+  # from the Actions tab when a macOS build is actually needed.
   workflow_dispatch: {}
 
 jobs:
-  release-windows:
-    runs-on: windows-latest
+  build-macos:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
 
-    permissions:
-      # tauri-action needs this to create the Release and upload assets.
-      contents: write
+    strategy:
+      # Don't let an Intel failure cancel the Apple Silicon build (or vice
+      # versa) - one working .dmg is still worth having.
+      fail-fast: false
+      matrix:
+        include:
+          # macos-14 runners are Apple Silicon (M-series). This is what
+          # almost every current Mac needs.
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            label: Apple Silicon (arm64)
+          # macos-13 runners are Intel. Only needed for pre-2020 Macs.
+          - runner: macos-13
+            target: x86_64-apple-darwin
+            label: Intel (x86_64)
 
     steps:
       - name: Check out the code
         uses: actions/checkout@v5
 
-      - name: Install Rust
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
+      # Rust builds dominate the runtime here; without a cache every run
+      # recompiles the whole dependency tree (~10-15 min).
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.target }}
 
       - name: Set up Node
         uses: actions/setup-node@v5
@@ -57,33 +64,53 @@ jobs:
           node-version: "20"
           cache: npm
 
+      # npm ci (not install) so the build matches package-lock.json exactly.
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build, sign, and publish the release
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # The updater signing keypair. Without these the build fails,
-          # because tauri.conf.json has createUpdaterArtifacts + a pubkey,
-          # so it expects to sign. See the setup notes at the top.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # NOTE: streamlink and ffmpeg are RUNTIME dependencies that the end
+      # user installs (the app shells out to them - see deps_check.rs).
+      # They are not needed to BUILD, so they're deliberately not installed
+      # here. The tester runs: brew install streamlink ffmpeg
+
+      # No signing env vars are set here ON PURPOSE.
+      #
+      # Do NOT add `APPLE_SIGNING_IDENTITY: ""` thinking it means "skip
+      # signing" - it doesn't. Tauri treats the variable being present as
+      # "signing was requested", then looks up an identity whose NAME is
+      # the empty string, doesn't find it, and fails the bundle with:
+      #   error: The specified item could not be found in the keychain.
+      # Leaving it unset entirely is what actually skips codesigning.
+      - name: Build the .app and .dmg
+        run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: Upload the .dmg
+        uses: actions/upload-artifact@v5
         with:
-          # tagName/​releaseName use the pushed tag. __VERSION__ is filled by
-          # tauri-action from tauri.conf.json's version.
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'app-v__VERSION__' }}
-          releaseName: "Twitch Native v__VERSION__"
-          releaseBody: "Automated release. The app will offer this as an in-app update on Windows."
-          releaseDraft: false
-          prerelease: false
-          # Only the Windows target; this is the Windows updater channel.
-          # --bundles nsis: build ONLY the NSIS .exe installer, not the
-          # .msi. Building both (via bundle.targets "all") made the
-          # updater's default "windows-x86_64" key point at the .msi while
-          # the app is installed via NSIS - a target mismatch that made the
-          # updater reject the release JSON ("Could not fetch a valid
-          # release JSON from the remote"). NSIS-only makes the default key
-          # point at the .exe the app was actually installed with, so the
-          # updater matches and the in-app update works.
-          args: --target x86_64-pc-windows-msvc --bundles nsis
+          name: TwitchNative-macos-${{ matrix.target }}
+          # Glob so the version in the filename doesn't have to be hardcoded.
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      # Fallback: if the .dmg step fails (dmg packaging is the most
+      # fragile part of a macOS bundle), the raw .app is still useful -
+      # it can be zipped and run directly.
+      - name: Upload the .app as a fallback
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: TwitchNative-macos-${{ matrix.target }}-app
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
+          if-no-files-found: ignore
+
+# ─────────────────────────────────────────────────────────────────────────
+# If you ever want a SIGNED + NOTARIZED build (so testers can just
+# double-click, with no right-click-Open step), you need a paid Apple
+# Developer account and these repository secrets, which Tauri reads:
+#   APPLE_CERTIFICATE            base64 of your Developer ID .p12
+#   APPLE_CERTIFICATE_PASSWORD
+#   APPLE_SIGNING_IDENTITY       e.g. "Developer ID Application: Name (TEAMID)"
+#   APPLE_ID                     your Apple ID email
+#   APPLE_PASSWORD               an app-specific password
+#   APPLE_TEAM_ID
+# For a personal build a friend is testing, unsigned is fine - skip all this.
