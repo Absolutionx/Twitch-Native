@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Twitch Native",
-  "version": "2.0.5",
+  "version": "2.0.0",
   "identifier": "com.twitchapp.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost https://id.twitch.tv https://api.twitch.tv https://gql.twitch.tv http://127.0.0.1:* https://7tv.io https://api.betterttv.net wss://irc-ws.chat.twitch.tv wss://eventsub.wss.twitch.tv wss://events.7tv.io https://usher.twitchapps.com https://*.cloudfront.net https://*.jtvnw.net https://*.twitchsvc.net; img-src 'self' data: https://static-cdn.jtvnw.net https://cdn.7tv.app https://*.7tv.app https://cdn.betterttv.net https:; media-src 'self' blob: http://127.0.0.1:*; script-src 'self'; style-src 'self' 'unsafe-inline'",
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost https://github.com https://*.github.com https://objects.githubusercontent.com https://*.githubusercontent.com https://id.twitch.tv https://api.twitch.tv https://gql.twitch.tv http://127.0.0.1:* https://7tv.io https://api.betterttv.net wss://irc-ws.chat.twitch.tv wss://eventsub.wss.twitch.tv wss://events.7tv.io https://usher.twitchapps.com https://*.cloudfront.net https://*.jtvnw.net https://*.twitchsvc.net; img-src 'self' data: https://static-cdn.jtvnw.net https://cdn.7tv.app https://*.7tv.app https://cdn.betterttv.net https:; media-src 'self' blob: http://127.0.0.1:*; script-src 'self'; style-src 'self' 'unsafe-inline'",
       "dangerousDisableAssetCspModification": true
     }
   },
@@ -51,7 +51,7 @@
       "endpoints": [
         "https://github.com/Absolutionx/Twitch-Native/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM2NkM0Qjk2RTUxOTFGOEIKUldTTEh4bmxsa3RzTm1LUmZYdlk0MGdBQitFdlM5YndxOGlCSm5ySnp3Yk5MT3V3UXlTMXE5YzcK",
+      "pubkey": "PASTE_PUBLIC_KEY_HERE",
       "windows": {
         "installMode": "passive"
       }
