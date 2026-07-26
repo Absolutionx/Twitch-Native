@@ -98,15 +98,31 @@ fn resolve_streamlink_path() -> std::path::PathBuf {
 pub(crate) fn resolve_dep_path(name: &str) -> std::path::PathBuf {
     #[cfg(target_os = "macos")]
     {
-        // Apple Silicon first: on an M-series Mac with both present (e.g.
-        // an Intel-era /usr/local left over from a migration), the native
-        // arm64 build in /opt/homebrew is the one to prefer.
-        for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
-            let candidate = std::path::Path::new(dir).join(name);
-            if candidate.is_file() {
-                return candidate;
+        // A Finder-launched .app gets a minimal PATH (often just
+        // /usr/bin:/bin:/usr/sbin:/sbin) with none of the places these
+        // tools actually install. Check the common ones explicitly.
+        // Order matters: Apple Silicon Homebrew first, then Intel
+        // Homebrew, then the two spots pip/pipx drop user installs.
+        let home = std::env::var("HOME").unwrap_or_default();
+        let candidates = [
+            format!("/opt/homebrew/bin/{name}"),      // Apple Silicon brew
+            format!("/usr/local/bin/{name}"),         // Intel brew
+            format!("{home}/.local/bin/{name}"),      // pipx / pip --user
+            format!("/opt/local/bin/{name}"),         // MacPorts
+        ];
+        for c in candidates {
+            let p = std::path::PathBuf::from(&c);
+            // is_file() follows symlinks, so a Homebrew symlink into
+            // ../Cellar resolves correctly.
+            if p.is_file() {
+                eprintln!("[deps] resolved {name} -> {c}");
+                return p;
             }
         }
+        eprintln!(
+            "[deps] {name} not found in known macOS locations; \
+             falling back to bare name (PATH lookup)"
+        );
     }
     std::path::PathBuf::from(name)
 }
@@ -302,6 +318,29 @@ enum PipelineResult {
 /// moov. Without `empty_moov`, ffmpeg waits until it has that info and then
 /// writes a proper, complete moov, which Chrome's MSE accepts. With
 /// `empty_moov`, ffmpeg would write an incomplete placeholder first.
+/// On macOS, ensures a child process (streamlink, ffmpeg) can find OTHER
+/// binaries it needs at runtime. A Finder-launched .app has a minimal
+/// PATH, and streamlink in particular shells out to ffmpeg itself for
+/// muxing - so even when we launch streamlink by absolute path, its own
+/// `ffmpeg` lookup fails unless we put the Homebrew/pip bin dirs on the
+/// PATH we hand it. Prepends the known locations to the inherited PATH.
+/// No-op on Windows/Linux, where the inherited PATH is already correct.
+#[allow(unused_variables)]
+fn augment_child_path(cmd: &mut Command) {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let extra = format!(
+            "/opt/homebrew/bin:/usr/local/bin:{home}/.local/bin:/opt/local/bin"
+        );
+        let combined = match std::env::var("PATH") {
+            Ok(existing) if !existing.is_empty() => format!("{extra}:{existing}"),
+            _ => extra,
+        };
+        cmd.env("PATH", combined);
+    }
+}
+
 async fn spawn_pipeline(
     target_url: &str,
     quality: &str,
@@ -316,7 +355,15 @@ async fn spawn_pipeline(
         .arg("--twitch-disable-ads")
         .args(extra_args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        // Capture streamlink's stderr instead of discarding it. When
+        // streamlink launches but then fails - most commonly on macOS,
+        // where a pip-installed streamlink's own Python interpreter isn't
+        // on a Finder-launched app's minimal PATH, or a plugin can't
+        // resolve the stream - its diagnostics are the only thing that
+        // says why. Discarding them (the old Stdio::null) turned every
+        // such failure into a silent black screen with no clue. The read
+        // loop drains this and logs it (see below).
+        .stderr(Stdio::piped())
         .stdin(Stdio::null())
         // Reap streamlink if this Child handle drops before the relay's
         // read loop takes ownership of it. Between spawn() here and that
@@ -331,11 +378,25 @@ async fn spawn_pipeline(
     #[cfg(windows)]
     sl_cmd.creation_flags(CREATE_NO_WINDOW);
 
+    augment_child_path(&mut sl_cmd);
     let mut sl_child = sl_cmd.spawn()?;
     let mut sl_stdout = sl_child
         .stdout
         .take()
         .expect("streamlink stdout not captured despite Stdio::piped()");
+    // Take stderr so we can report WHY streamlink produced nothing. Spawn
+    // a task to drain it concurrently with the stdout probe read below:
+    // stderr must be drained even in the success path or a chatty
+    // streamlink could fill the pipe buffer and block, and in the failure
+    // path (probe_n == 0) its contents are exactly the diagnostic we want.
+    let sl_stderr = sl_child.stderr.take();
+    let stderr_handle = sl_stderr.map(|mut e| {
+        tokio::spawn(async move {
+            let mut buf = String::new();
+            let _ = e.read_to_string(&mut buf).await;
+            buf
+        })
+    });
 
     // Read up to one full pump-chunk to detect the container format.
     // Using a full 64 KB here means the probe bytes serve double-duty as
@@ -344,20 +405,52 @@ async fn spawn_pipeline(
     let mut probe = vec![0u8; 64 * 1024];
     let probe_n = sl_stdout.read(&mut probe).await?;
     if probe_n == 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::UnexpectedEof,
-            "streamlink closed its output without producing any data",
-        ));
+        // Streamlink opened its stdout but wrote nothing, then closed it.
+        // Pull whatever it said on stderr so the error is actionable
+        // (streamlink not finding its Python, a plugin failing to resolve
+        // the stream, an auth problem) instead of a bare "no data".
+        let detail = match stderr_handle {
+            Some(h) => h.await.unwrap_or_default(),
+            None => String::new(),
+        };
+        let detail = detail.trim();
+        let msg = if detail.is_empty() {
+            "streamlink closed its output without producing any data".to_string()
+        } else {
+            format!("streamlink produced no data. streamlink said: {detail}")
+        };
+        return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, msg));
     }
+    // Success path: don't leave the stderr drain task dangling. Detach it -
+    // it finishes when streamlink eventually closes stderr, and the reaped
+    // string is only needed on the failure path above.
+    drop(stderr_handle);
     probe.truncate(probe_n);
 
     // MPEG-TS packets always start with sync byte 0x47. Everything else
     // (fMP4, ftyp box) starts with a 4-byte big-endian box size (first
     // byte 0x00 for any sane box < 16 MB). This single byte is enough
     // to reliably distinguish the two formats in practice.
-    if probe[0] == 0x47 {
-        // MPEG-TS → ffmpeg remux.
-        // No `empty_moov` here: ffmpeg probes the MPEG-TS stream first,
+    //
+    // macOS override: WebKit (WKWebView, the engine on macOS) rejects
+    // Twitch's raw passthrough fMP4 - confirmed via a friend's console
+    // showing avc1.64002a decode as MEDIA_ERR_DECODE despite
+    // isTypeSupported reporting true, then the SourceBuffer going invalid.
+    // The same bytes decode fine in Chromium (WebView2 on Windows), so
+    // this is a WebKit-vs-Chromium fMP4-strictness difference, not a codec
+    // or dependency problem. Routing fMP4 through the SAME ffmpeg remux
+    // that MPEG-TS uses re-writes it into a cleanly-structured fMP4 WebKit
+    // accepts. `-c copy` keeps the identical codec - no re-encode, no
+    // quality loss, negligible CPU - it just rebuilds the container boxes.
+    // Only on macOS: on Windows/Linux passthrough works and is cheaper.
+    #[cfg(target_os = "macos")]
+    let force_remux = true;
+    #[cfg(not(target_os = "macos"))]
+    let force_remux = false;
+
+    if probe[0] == 0x47 || force_remux {
+        // MPEG-TS → ffmpeg remux, OR fMP4-on-macOS forced through remux.
+        // No `empty_moov` here: ffmpeg probes the input stream first,
         // then writes a complete moov once it knows the codec parameters.
         // `frag_keyframe` + `default_base_moof` produce self-contained
         // fragments that MSE's SourceBuffer expects.
@@ -384,6 +477,7 @@ async fn spawn_pipeline(
         #[cfg(windows)]
         ff_cmd.creation_flags(CREATE_NO_WINDOW);
 
+        augment_child_path(&mut ff_cmd);
         let mut ff_child = ff_cmd.spawn().map_err(|e| {
             std::io::Error::new(
                 e.kind(),
@@ -1723,6 +1817,7 @@ pub async fn get_vod_m3u8_url(
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
+    augment_child_path(&mut cmd);
     let output = cmd.output().await.map_err(|e| e.to_string())?;
 
     let cdn_url = String::from_utf8(output.stdout)
@@ -1737,6 +1832,60 @@ pub async fn get_vod_m3u8_url(
 
     // Wrap in the local proxy so HLS.js fetches through localhost,
     // sidestepping Twitch CDN's missing CORS headers.
+    proxied_hls_url(&state, &cdn_url).await
+}
+
+/// Live-channel counterpart of get_vod_m3u8_url: resolves a LIVE channel's
+/// ad-free HLS playlist URL (via streamlink, so --twitch-disable-ads still
+/// does its ad-stripping) and wraps it in the local proxy for CORS.
+///
+/// This exists for the macOS native-HLS playback path. On macOS the app
+/// plays live through hls.js / native HLS (attachHlsDvr) instead of the
+/// fMP4 byte-relay + MSE pipeline, because WebKit's MSE is unreliable
+/// (classic MediaSource half-works then decode-fails; ManagedMediaSource
+/// has strict append-timing rules). Native HLS on WebKit is
+/// hardware-accelerated and sidesteps that entire class of problem.
+///
+/// AD NOTE: ad-stripping is preserved because it happens in streamlink
+/// (--twitch-disable-ads selects the ad-reduced variant during URL
+/// resolution), exactly as it does for the byte-relay path. The one
+/// difference from the pipe-based path: streamlink is not kept in the loop
+/// to splice out ads injected mid-stream after resolution, so dynamically-
+/// stitched ads *could* leak where the pipe path would have caught them.
+/// This is the known trade-off of the native-HLS approach, and why the
+/// byte-relay path is kept as the default on Windows.
+#[tauri::command]
+pub async fn get_live_m3u8_url(
+    channel: String,
+    quality: String,
+    state: tauri::State<'_, Arc<StreamRelayState>>,
+) -> Result<String, String> {
+    let target = format!("https://www.twitch.tv/{channel}");
+    let mut cmd = Command::new(resolve_streamlink_path());
+    cmd.arg(&target)
+        .arg(&quality)
+        .arg("--stream-url")
+        .arg("--twitch-disable-ads")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    augment_child_path(&mut cmd);
+    let output = cmd.output().await.map_err(|e| e.to_string())?;
+
+    let cdn_url = String::from_utf8(output.stdout)
+        .map_err(|e| e.to_string())?
+        .lines()
+        .find(|l| l.starts_with("http"))
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            format!("streamlink produced no URL: {stderr}")
+        })?;
+
     proxied_hls_url(&state, &cdn_url).await
 }
 
@@ -1822,6 +1971,7 @@ async fn list_available_qualities(target_url: &str) -> Result<Vec<String>, Strin
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
+    augment_child_path(&mut cmd);
     let output = cmd
         .output()
         .await

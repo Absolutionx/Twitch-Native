@@ -109,7 +109,7 @@ fn main() {
     // unrelated to Tauri itself.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // Must be the FIRST plugin registered (per the plugin's own docs)
         // so it runs before anything else gets a chance to spawn windows/
         // tray icons for what would otherwise be a second, fully separate
@@ -127,6 +127,19 @@ fn main() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        // process (relaunch after update) and os (platform() gate in the
+        // updater banner). Cross-platform, so registered unconditionally.
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_os::init());
+
+    // Auto-updater: Windows only. macOS/Linux are distributed via the
+    // GitHub Actions .dmg and don't self-update, so we don't even register
+    // the plugin there - keeps the update-check code path from running on
+    // platforms with no update endpoint for them.
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder
         .setup(|app| {
             tray::setup_tray(app).map_err(|e| e.to_string())?;
             Ok(())
@@ -162,6 +175,7 @@ fn main() {
             kick_chat::start_kick_chat,
             kick_chat::stop_kick_chat,
             stream_relay::get_vod_m3u8_url,
+            stream_relay::get_live_m3u8_url,
             stream_relay::stop_stream,
             stream_relay::get_available_qualities,
             stream_relay::get_available_vod_qualities,

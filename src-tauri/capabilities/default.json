@@ -27,6 +27,10 @@
     "core:window:allow-current-monitor",
     "core:window:allow-available-monitors",
     "core:window:allow-primary-monitor",
-    "core:window:allow-set-focus"
+    "core:window:allow-set-focus",
+    "updater:default",
+    "process:default",
+    "process:allow-restart",
+    "os:default"
   ]
 }

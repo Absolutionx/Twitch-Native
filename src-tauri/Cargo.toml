@@ -59,6 +59,18 @@ tauri-plugin-notification = "2"
 # instance).
 tauri-plugin-single-instance = "2"
 
+# Auto-updater. Windows-only by design: the updater is wired up behind a
+# #[cfg(windows)] in main.rs and the endpoint only serves a Windows target,
+# so macOS/Linux builds simply never check for updates (their distribution
+# is the GitHub Actions .dmg, handled separately). The plugin crate itself
+# is cross-platform; gating happens at the call site.
+tauri-plugin-updater = "2"
+# Needed by the updater flow: process = relaunch() after install; os =
+# platform() so the frontend only runs the update check on Windows. Both
+# are cross-platform crates; registered unconditionally (cheap, harmless).
+tauri-plugin-process = "2"
+tauri-plugin-os = "2"
+
 [dependencies.time]
 version = "=0.3.49"
 
