@@ -11,13 +11,13 @@ a much smaller memory footprint than watching in a browser.
 
 ## Why this exists
 
-Watching Twitch in a browser tab typically costs 1.5–2.5GB of RAM once
+Watching Twitch in a browser tab typically costs 1.5-2.5GB of RAM once
 you account for the browser's renderer process, Twitch's full web app
 bundle, ads infrastructure, and chat rendering. This app instead:
 
 1. Uses [streamlink](https://streamlink.github.io/) as a subprocess to
    pull the raw stream (ad-stripped via `--twitch-disable-ads`),
-2. Plays it natively — see [How playback works](#how-playback-works) for
+2. Plays it natively - see [How playback works](#how-playback-works) for
    the per-platform details,
 3. Renders chat and UI natively, with no browser chrome or ads SDK.
 
@@ -26,7 +26,7 @@ Typical memory usage lands around 30MB on Windows.
 ## Download and install
 
 The easiest way to get the app is a prebuilt installer from the
-[Releases](../../releases) page — no build tools required.
+[Releases](../../releases) page - no build tools required.
 
 - **Windows:** download the `_x64-setup.exe` from the latest release and
   run it. After the first install, the app **updates itself**: when a new
@@ -48,7 +48,8 @@ The app shells out to two tools to play video. Install both before use:
   dependency banner, or install them manually.
 - **macOS:** `brew install streamlink ffmpeg`
 - **Linux:** install `streamlink` and `ffmpeg` from your distro's package
-  manager.
+  manager. (See the platform-support note under Known limitations - Linux
+  is untested.)
 
 On macOS, a Finder-launched app doesn't inherit your shell's `PATH`, so the
 app looks for streamlink/ffmpeg in the usual Homebrew locations
@@ -69,13 +70,14 @@ Playback takes a different path per platform, for good reasons:
   and robust. (A tradeoff: streamlink isn't kept in-loop to splice
   dynamically-stitched mid-stream ads on this path, so some may occasionally
   leak where the Windows path would catch them.)
-- **VODs and Kick** on all platforms play through hls.js / native HLS.
+- **VODs** on all platforms, and **Kick** on Windows, play through hls.js /
+  native HLS. (Kick on macOS is untested - see the platform note below.)
 
 ## Known limitations
 
 - **Twitch Drops and Channel Points do not accrue while watching through
   this app.** Both are tracked by a "minute watched" heartbeat that only
-  the official Twitch player emits — this app plays real video from a
+  the official Twitch player emits - this app plays real video from a
   real stream, but that specific signal isn't part of what streamlink
   relays, so Twitch's backend has no way to know you're watching. If a
   drop matters to you, watch that stream in a browser or the official
@@ -87,12 +89,15 @@ Playback takes a different path per platform, for good reasons:
   There's an unavoidable few-seconds delay the first time you do this
   per session, since it involves resolving a CDN URL; subsequent seeks
   reuse a cached URL and are much faster.
-- The app has had the most real-world testing on Windows, followed by
-  macOS. Linux is targeted by the build scripts but less exercised.
+- **Platform support:** the app has had the most real-world testing on
+  Windows, followed by macOS. **Linux is fully untested** - it's targeted
+  by the build scripts and may build, but nothing on it has been verified.
+  **Kick on macOS is also untested** and may not work. Treat both as
+  unsupported for now.
 
 ## Building from source
 
-You only need this if you want to develop or build the app yourself — most
+You only need this if you want to develop or build the app yourself - most
 people should use a prebuilt installer from [Releases](../../releases).
 
 ### Prerequisites
@@ -100,7 +105,7 @@ people should use a prebuilt installer from [Releases](../../releases).
 - [Node.js](https://nodejs.org/) 18+
 - [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
 - [streamlink](https://streamlink.github.io/install.html) and `ffmpeg`
-  (runtime dependencies — see above)
+  (runtime dependencies - see above)
 
 ### Develop
 
@@ -123,8 +128,8 @@ also bootstrap missing system dependencies.
 Releases are built and published by GitHub Actions:
 
 - Pushing a `v*` tag (or publishing a release with that tag) triggers the
-  Windows workflow, which builds and signs the installer and attaches it —
-  plus the `latest.json` the auto-updater checks — to the release.
+  Windows workflow, which builds and signs the installer and attaches it -
+  plus the `latest.json` the auto-updater checks - to the release.
 - The macOS workflow is manual (run it from the Actions tab when a macOS
   build is needed).
 
@@ -135,7 +140,7 @@ The Windows auto-updater requires a signing keypair; setup is documented in
 ### Logging in
 
 Login uses Twitch's standard OAuth implicit-grant flow via your system's
-default browser (not an embedded webview — see the comment block at the
+default browser (not an embedded webview - see the comment block at the
 top of `src-tauri/src/oauth.rs` for why). No client secret is involved;
 the `CLIENT_ID` values in this repo are public identifiers, not
 credentials, and are safe to keep in source control. If you fork this
@@ -147,35 +152,35 @@ and swap in your own client ID.
 
 ```
 src/                    Frontend (vanilla JS, no framework)
-  main.js                 Application entry point / state orchestration
-  stream-player.js        MSE feeder for the live relay (Windows path)
-  vod-player.js           hls.js / native-HLS wrapper (VODs, Kick, macOS live)
-  playback-controls.js    Seek bar, quality menu, live-DVR handoff, PiP
-  chat.js                 Chat connection lifecycle + message pipeline
-  chat/                   Chat feature mixins (see file header comments):
-                            chat-emotes.js, chat-badges.js, chat-automod.js,
-                            chat-usercard.js, chat-mod-actions.js,
-                            chat-link-preview.js, chat-autocomplete.js,
-                            shared.js
-  update-banner.js        In-app auto-updater UI (Windows)
-  deps-banner.js          System-dependency bootstrap banner
+  main.js               Application entry point / state orchestration
+  stream-player.js      MSE feeder for the live relay (Windows path)
+  vod-player.js         hls.js / native-HLS wrapper (VODs, Kick, macOS live)
+  playback-controls.js  Seek bar, quality menu, live-DVR handoff, PiP
+  chat.js               Chat connection lifecycle + message pipeline
+  chat/                 Chat feature mixins (see file header comments):
+                          chat-emotes.js, chat-badges.js, chat-automod.js,
+                          chat-usercard.js, chat-mod-actions.js,
+                          chat-link-preview.js, chat-autocomplete.js,
+                          shared.js
+  update-banner.js      In-app auto-updater UI (Windows)
+  deps-banner.js        System-dependency bootstrap banner
   auth.js, sidebar.js, home.js, browse.js, vods.js,
-  chapters.js, drops.js   Feature-specific UI modules
+  chapters.js, drops.js Feature-specific UI modules
 
 src-tauri/src/          Backend (Rust)
-  main.rs                 Tauri app setup, command registration, and the
-                            Helix (Twitch REST API) commands
-  stream_relay.rs         Spawns streamlink/ffmpeg, relays bytes over HTTP
-                            (Windows), resolves ad-free m3u8 URLs (macOS),
-                            and proxies HLS for CORS
-  chat.rs                 IRC WebSocket connection
-  oauth.rs                Native-browser OAuth flow (Twitch)
-  kick_oauth.rs           Kick OAuth 2.1 + PKCE flow
-  eventsub.rs             Twitch EventSub (go-live notifications, raids)
-  seventv_events.rs       7TV real-time emote updates
-  link_preview.rs         Chat link hover-preview metadata fetching
-  tray.rs                 System tray icon/menu
-  notify_prefs.rs         Persisted per-channel notification preferences
+  main.rs               Tauri app setup, command registration, and the
+                          Helix (Twitch REST API) commands
+  stream_relay.rs       Spawns streamlink/ffmpeg, relays bytes over HTTP
+                          (Windows), resolves ad-free m3u8 URLs (macOS),
+                          and proxies HLS for CORS
+  chat.rs               IRC WebSocket connection
+  oauth.rs              Native-browser OAuth flow (Twitch)
+  kick_oauth.rs         Kick OAuth 2.1 + PKCE flow
+  eventsub.rs           Twitch EventSub (go-live notifications, raids)
+  seventv_events.rs     7TV real-time emote updates
+  link_preview.rs       Chat link hover-preview metadata fetching
+  tray.rs               System tray icon/menu
+  notify_prefs.rs       Persisted per-channel notification preferences
 ```
 
 ## Contributing
@@ -184,7 +189,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
-[MIT](./LICENSE) — see that file for the full text. Twitch, the Twitch
+[MIT](./LICENSE) - see that file for the full text. Twitch, the Twitch
 logo, and related marks are trademarks of Twitch Interactive, Inc.; Kick
 and related marks are trademarks of their respective owners. This project
 is an independent, unofficial client.
@@ -196,7 +201,12 @@ app between Twitch and Kick: home feed, browse/categories/search, the
 sidebar's live channels, and the watch box. Twitch is the default (purple
 border); Kick mode turns the border green.
 
-### Kick login (optional — needed only to type in Kick chat)
+> **Platform note:** Kick support is developed and tested on Windows. On
+> macOS it is currently **untested and may not work** - the macOS playback
+> path differs from Windows (native HLS vs the byte relay), and Kick on that
+> path hasn't been verified. Treat macOS Kick as unsupported for now.
+
+### Kick login (optional - needed only to type in Kick chat)
 
 Watching Kick streams and reading Kick chat need no login. **Sending** chat
 messages does. Kick uses OAuth 2.1 with PKCE and, unlike Twitch's implicit
@@ -214,7 +224,7 @@ To enable it:
 5. Rebuild.
 
 Until this is done, `kick_oauth_configured()` returns false and the app
-simply hides the "Log in with Kick" button — Kick chat stays read-only
+simply hides the "Log in with Kick" button - Kick chat stays read-only
 rather than offering a login that could only fail. Tokens are stored in
 `kick_oauth_token.json` in the app's local data dir, separate from the
 Twitch token, and are refreshed automatically when they expire (~1 hour).
