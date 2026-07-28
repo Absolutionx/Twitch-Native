@@ -11,20 +11,20 @@
 # Security -> "Open Anyway"), after which it launches normally. That's
 # expected for an unsigned personal build - see the notes at the bottom for
 # what signing would require.
- 
+
 name: Build macOS
- 
+
 on:
   # Manual-only. The automatic tag trigger was removed so publishing a
   # release builds Windows ONLY (see release-windows.yml). Run this by hand
   # from the Actions tab when a macOS build is actually needed.
   workflow_dispatch: {}
- 
+
 jobs:
   build-macos:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.runner }}
- 
+
     strategy:
       # Don't let an Intel failure cancel the Apple Silicon build (or vice
       # versa) - one working .dmg is still worth having.
@@ -40,16 +40,16 @@ jobs:
           - runner: macos-13
             target: x86_64-apple-darwin
             label: Intel (x86_64)
- 
+
     steps:
       - name: Check out the code
         uses: actions/checkout@v5
- 
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
- 
+
       # Rust builds dominate the runtime here; without a cache every run
       # recompiles the whole dependency tree (~10-15 min).
       - name: Cache Rust build
@@ -57,22 +57,22 @@ jobs:
         with:
           workspaces: src-tauri
           key: ${{ matrix.target }}
- 
+
       - name: Set up Node
         uses: actions/setup-node@v5
         with:
           node-version: "20"
           cache: npm
- 
+
       # npm ci (not install) so the build matches package-lock.json exactly.
       - name: Install frontend dependencies
         run: npm ci
- 
+
       # NOTE: streamlink and ffmpeg are RUNTIME dependencies that the end
       # user installs (the app shells out to them - see deps_check.rs).
       # They are not needed to BUILD, so they're deliberately not installed
       # here. The tester runs: brew install streamlink ffmpeg
- 
+
       # No signing env vars are set here ON PURPOSE.
       #
       # Do NOT add `APPLE_SIGNING_IDENTITY: ""` thinking it means "skip
@@ -83,7 +83,7 @@ jobs:
       # Leaving it unset entirely is what actually skips codesigning.
       - name: Build the .app and .dmg
         run: npm run tauri build -- --target ${{ matrix.target }}
- 
+
       - name: Upload the .dmg
         uses: actions/upload-artifact@v5
         with:
@@ -91,7 +91,7 @@ jobs:
           # Glob so the version in the filename doesn't have to be hardcoded.
           path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
           if-no-files-found: error
- 
+
       # Fallback: if the .dmg step fails (dmg packaging is the most
       # fragile part of a macOS bundle), the raw .app is still useful -
       # it can be zipped and run directly.
@@ -102,7 +102,7 @@ jobs:
           name: TwitchNative-macos-${{ matrix.target }}-app
           path: src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
           if-no-files-found: ignore
- 
+
 # ─────────────────────────────────────────────────────────────────────────
 # If you ever want a SIGNED + NOTARIZED build (so testers can just
 # double-click, with no right-click-Open step), you need a paid Apple
@@ -114,4 +114,3 @@ jobs:
 #   APPLE_PASSWORD               an app-specific password
 #   APPLE_TEAM_ID
 # For a personal build a friend is testing, unsigned is fine - skip all this.
- 

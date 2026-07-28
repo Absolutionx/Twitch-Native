@@ -1536,6 +1536,65 @@ export class TwitchChat {
     this.trimAndScroll();
   }
 
+  /**
+   * Renders a zero-width emote as an overlay on top of the preceding emote.
+   *
+   * Zero-width emotes (7TV/BTTV overlays like Fog0) are designed to stack
+   * onto the emote before them, forming one combined glyph - that's how the
+   * Twitch site and 7TV show them. Given the fragment built so far, this
+   * finds the last emote image, wraps it in a positioned container (if it
+   * isn't already one), and layers the zero-width emote absolutely centered
+   * over it. Returns true if it overlaid successfully, false if there was no
+   * preceding emote to stack on (caller then renders it as a normal image).
+   */
+  _overlayZeroWidthEmote(fragment, emoteUrl, word) {
+    // The most recently appended node is usually a separator space; the
+    // emote is the node before it. Walk back past trailing text nodes to
+    // find the last element (an <img.chat-emote> or an existing overlay
+    // container).
+    let anchor = fragment.lastChild;
+    while (anchor && anchor.nodeType === Node.TEXT_NODE) {
+      const prev = anchor.previousSibling;
+      // Drop the separating space we appended after the previous emote, so
+      // the overlay sits flush on it rather than a space away.
+      fragment.removeChild(anchor);
+      anchor = prev;
+    }
+    if (!anchor || anchor.nodeType !== Node.ELEMENT_NODE) return false;
+
+    let container;
+    if (anchor.classList && anchor.classList.contains("chat-emote-overlay")) {
+      // Already an overlay stack (a second/third zero-width emote on the
+      // same base) - just add another layer.
+      container = anchor;
+    } else if (anchor.classList && anchor.classList.contains("chat-emote")) {
+      // Wrap the base emote in an overlay container in-place.
+      container = document.createElement("span");
+      container.className = "chat-emote-overlay";
+      fragment.replaceChild(container, anchor);
+      anchor.classList.add("chat-emote-overlay-base");
+      container.appendChild(anchor);
+    } else {
+      return false;
+    }
+
+    const layer = document.createElement("img");
+    layer.className = "chat-emote chat-emote-overlay-layer";
+    layer.src = emoteUrl;
+    layer.alt = word;
+    layer.title = word;
+    layer.loading = "lazy";
+    layer.onerror = () => {
+      this._loggedEmoteUrlFailures ??= new Set();
+      if (!this._loggedEmoteUrlFailures.has(emoteUrl)) {
+        this._loggedEmoteUrlFailures.add(emoteUrl);
+        console.warn(`[emotes] Image failed to load for "${word}": ${emoteUrl}`);
+      }
+    };
+    container.appendChild(layer);
+    return true;
+  }
+
   /** Splits message text on whitespace and renders emotes and cheermotes inline.
    * Checks Twitch native emotes (by position from IRC tag) first, then
    * 7TV/BTTV emotes (by name), then cheermotes, then plain text. */
@@ -1589,9 +1648,38 @@ export class TwitchChat {
         // 7TV / BTTV emote — matched by name; Twitch native — name fallback
         const emote        = this.sevenTvEmotes.get(word);
         const twitchByName = !emote ? (this.twitchNativeEmotes?.get(word) ?? null) : null;
+        // One-time-per-emote diagnostic: log what the app knows about an
+        // emote's zero-width status, so a "not overlaying" report can be
+        // traced to detection (emote.zeroWidth false/undefined) vs rendering.
+        if (emote) {
+          this._loggedZeroWidthChecks ??= new Set();
+          if (!this._loggedZeroWidthChecks.has(word)) {
+            this._loggedZeroWidthChecks.add(word);
+            console.log(`[emotes] "${word}" provider-emote zeroWidth=${emote.zeroWidth} provider=${emote.provider}`);
+          }
+        }
         const emoteUrl     = emote?.url
           ?? (twitchByName ? `https://static-cdn.jtvnw.net/emoticons/v2/${twitchByName.id}/default/dark/2.0` : null);
         if (emoteUrl) {
+          // Zero-width emotes (7TV/BTTV overlay emotes like Fog0, cvHazmat)
+          // are meant to render ON TOP OF the preceding emote, not beside
+          // it. Twitch's site and 7TV stack them into a single glyph. Detect
+          // the flag and, instead of appending a standalone image, wrap the
+          // previous emote and this one in an overlay container so they
+          // occupy the same space.
+          if (emote?.zeroWidth) {
+            const overlaid = this._overlayZeroWidthEmote(fragment, emoteUrl, word);
+            if (overlaid) {
+              // A zero-width emote consumes no horizontal space and needs no
+              // trailing separator of its own - skip the usual space append
+              // and advance charPos.
+              charPos += word.length + 1;
+              return;
+            }
+            // If there was no preceding emote to overlay onto (zero-width
+            // emote at the start of a message), fall through and render it
+            // as a normal standalone image rather than dropping it.
+          }
           const img = document.createElement("img");
           img.className = "chat-emote";
           img.src = emoteUrl;

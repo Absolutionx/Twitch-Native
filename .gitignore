@@ -1,0 +1,23 @@
+# --- Node / Vite -------------------------------------------------------
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# --- Rust / Tauri --------------------------------------------------------
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# --- Local runtime data (never commit real credentials/tokens) -----------
+# oauth_token.json is written at runtime into the OS-specific app-local
+# data dir (see src-tauri/src/oauth.rs), not into the repo - this entry is
+# just a safety net in case anyone runs the dev build from the repo root.
+oauth_token.json
+notify_prefs.json
+*.log
+
+# --- Editor / OS ----------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

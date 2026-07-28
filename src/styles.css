@@ -2867,6 +2867,28 @@ body.kick-mode .sidebar-channel-name {
   margin: 0 1px;
   display: inline-block;
 }
+/* Zero-width emote overlay stack: the base emote sits in normal flow, and
+   each zero-width layer is absolutely positioned centered on top of it, so
+   overlay emotes (Fog0, cvHazmat, etc.) stack into one combined glyph the
+   way Twitch's site and 7TV render them. */
+.chat-emote-overlay {
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+}
+.chat-emote-overlay .chat-emote-overlay-base {
+  position: relative;
+  display: block;
+  margin: 0 1px;
+}
+.chat-emote-overlay .chat-emote-overlay-layer {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  pointer-events: none;
+}
 .chat-message-text {
   color: #efeff1;
 }

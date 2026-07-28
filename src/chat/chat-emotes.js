@@ -17,6 +17,33 @@ import {
   isChannelProvider,
 } from "./emote-parsing.js";
 
+// 7TV's zero-width (overlay) flag. In the v3 API this is bit 8 (1 << 8 =
+// 256) on the ActiveEmote, NOT bit 1 - a long-standing gotcha (see
+// night/betterttv#5925). The flag can appear on the emote wrapper's own
+// `flags` and/or the nested `data.flags`, so we OR both. Getting this wrong
+// (checking `& 1`) means zero-width emotes like Fog0/CiGrip are never
+// detected and render side-by-side instead of overlaid.
+const SEVENTV_ZERO_WIDTH_FLAG = 1 << 8; // 256
+const isSevenTvZeroWidth = (emote) =>
+  Boolean(((emote?.flags ?? 0) | (emote?.data?.flags ?? 0)) & SEVENTV_ZERO_WIDTH_FLAG);
+
+// BTTV zero-width (overlay) emotes. Unlike 7TV - which exposes a per-emote
+// zero-width flag in its API - BTTV's API returns no such flag,
+// so its overlay emotes can only be recognized by name against this fixed
+// list, exactly as BTTV's own frontend and other chat clients do. These
+// render ON TOP OF the preceding emote (handled by _overlayZeroWidthEmote
+// in chat.js) rather than beside it.
+const BTTV_ZERO_WIDTH_EMOTES = new Set([
+  "SoSnowy",
+  "IceCold",
+  "SantaHat",
+  "TopHat",
+  "ReinDeer",
+  "CandyCane",
+  "cvMask",
+  "cvHazmat",
+]);
+
 export const chatEmotesMixin = {
   /** See emote-parsing.js - kept as methods so render code can keep
    * calling this.parseTwitchEmotesTag() etc. unchanged. */
@@ -205,7 +232,7 @@ export const chatEmotesMixin = {
         // BTTV CDN: https://cdn.betterttv.net/emote/<id>/2x.<ext>
         const ext = emote.imageType || "png";
         const url = `https://cdn.betterttv.net/emote/${emote.id}/2x.${ext}`;
-        this._setEmote(emote.code, { url, zeroWidth: false }, "bttv-global");
+        this._setEmote(emote.code, { url, zeroWidth: BTTV_ZERO_WIDTH_EMOTES.has(emote.code) }, "bttv-global");
         count++;
       }
       console.log(`Loaded ${count} BTTV global emotes.`);
@@ -235,7 +262,7 @@ export const chatEmotesMixin = {
         if (!emote?.id || !emote?.code) continue;
         const ext = emote.imageType || "png";
         const url = `https://cdn.betterttv.net/emote/${emote.id}/2x.${ext}`;
-        this._setEmote(emote.code, { url, zeroWidth: false }, "bttv-channel");
+        this._setEmote(emote.code, { url, zeroWidth: BTTV_ZERO_WIDTH_EMOTES.has(emote.code) }, "bttv-channel");
         count++;
       }
       if (count > 0) this.systemLine(`Loaded ${count} BTTV emotes for this channel.`);
@@ -536,7 +563,7 @@ export const chatEmotesMixin = {
       }
       this._setEmote(emote.name, {
         url,
-        zeroWidth: Boolean(emote.data?.flags & 1),
+        zeroWidth: isSevenTvZeroWidth(emote),
       }, provider);
     }
   },
@@ -563,7 +590,7 @@ export const chatEmotesMixin = {
       }
       this._setEmote(emote.name, {
         url,
-        zeroWidth: Boolean(emote.data?.flags & 1),
+        zeroWidth: isSevenTvZeroWidth(emote),
       }, "seventv-channel");
     }
     for (const emote of removed) {

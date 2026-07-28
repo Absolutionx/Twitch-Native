@@ -2279,6 +2279,53 @@ watchBtn.addEventListener("click", async () => {
   }
 });
 
+// WebView2 sleep/wake surface-desync recovery.
+//
+// Symptom: PC sleeps with the app open, and on wake the web content is stuck
+// at its old (smaller) size in the top-left with black margins - WebView2
+// missed the resize when the display reinitialized on resume.
+//
+// This ONLY acts when there is a genuine desync: it compares what the webview
+// believes its size is (window.innerWidth/Height, in CSS px scaled to
+// physical) against the OS window's real inner size from Tauri. On a normal
+// alt-tab those already match, so nothing happens - which is the fix for the
+// previous version nudging the window on every focus. Only when they actually
+// differ (the post-sleep case) does it nudge the window by one pixel and back
+// to force WebView2 to recompute its surface.
+{
+  let _recovering = false;
+  const recoverIfDesynced = async () => {
+    if (_recovering) return;
+    _recovering = true;
+    try {
+      const factor = window.devicePixelRatio || 1;
+      const webviewPhysW = Math.round(window.innerWidth * factor);
+      const inner = await appWindow.innerSize(); // physical px from Tauri
+      // Allow a couple px of rounding slack; a real desync is tens-to-
+      // hundreds of px off (the whole black-margin gap).
+      if (Math.abs(inner.width - webviewPhysW) > 4) {
+        console.log(
+          `[resize-recovery] desync detected (webview ${webviewPhysW}px vs window ${inner.width}px); nudging`,
+        );
+        const { PhysicalSize } = await import("@tauri-apps/api/window");
+        await appWindow.setSize(new PhysicalSize(inner.width + 1, inner.height));
+        await appWindow.setSize(new PhysicalSize(inner.width, inner.height));
+      }
+    } catch (err) {
+      console.warn("[resize-recovery] check failed:", err);
+    } finally {
+      _recovering = false;
+    }
+  };
+  // Check when the page becomes visible or the window regains focus - these
+  // are when a post-sleep desync would first be observable. The mismatch
+  // guard above means a normal alt-tab is a no-op.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") recoverIfDesynced();
+  });
+  window.addEventListener("focus", recoverIfDesynced);
+}
+
 // Previously this file kept mpv's native window glued to #video-region
 // here: a 'resize' listener, a 500ms poll as a drag-resize safety net, and
 // an appWindow.onMoved() listener, all calling syncVideoRegion(). None of
