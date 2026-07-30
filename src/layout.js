@@ -1,14 +1,6 @@
-// layout.js — app chrome: page switching, theater mode, header/chat
-// collapse, and true OS fullscreen.
-//
-// All of these do the same kind of thing: toggle a class on #app and keep
-// a button's active styling in sync. None of them touch playback, which
-// is why they were the last cluster that had no business living in
-// main.js.
-//
-// The page objects are injected rather than imported: main.js constructs
-// them with callbacks that reach back into playback, so importing them
-// here would be a cycle.
+// App chrome: page switching, theater mode, header/chat collapse, and OS
+// fullscreen - each toggles a class on #app and syncs a button's active state.
+// Page objects are injected (not imported) to avoid a cycle with main.js.
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { session } from "./session.js";

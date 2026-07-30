@@ -1,19 +1,8 @@
-// link_preview.rs — hovering a URL posted in chat.
-//
-// Done in Rust rather than fetch() from the webview for the same reason
-// img.src on a remote URL works fine but a generic cross-origin fetch()
-// reading the response body often doesn't: most sites don't send
-// permissive CORS headers, so the renderer would get an opaque response it
-// can't read the HTML out of. A plain reqwest GET here has no CORS concept
-// at all - it's just an HTTP client - so it can read the bytes and hand
-// back parsed metadata as JSON.
-//
-// This deliberately does NOT pull in an HTML-parsing crate (e.g. scraper/
-// html5ever) just for og:title/og:description/og:image - those are always
-// simple `<meta property="..." content="...">` tags that appear in the
-// raw markup well before any script-rendered content, so a small regex
-// scan over the first chunk of bytes is enough and avoids a fairly heavy
-// dependency for what's a non-critical preview feature.
+// Link-hover previews for chat URLs. In Rust because a cross-origin webview
+// fetch() usually can't read the response body (no CORS headers), while a plain
+// reqwest GET has no CORS concept and can. Scans the first chunk of markup with
+// a small regex for og:title/description/image rather than pulling in an HTML
+// parser for a non-critical feature.
 
 use serde::Serialize;
 

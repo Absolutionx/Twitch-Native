@@ -1,13 +1,6 @@
-// deps-banner.js — the "streamlink/ffmpeg are missing" startup banner.
-//
-// Neither is installed by the app itself (see deps_check.rs for why).
-// Checked once at startup; if either is missing, this offers to install
-// both via winget from inside the app, rather than leaving the person to
-// decode a "failed to launch stream pipeline" error on their own.
-//
-// Fully self-contained: it owns its own DOM and its own listeners, and
-// shares no state with the rest of the app. Importing it wires the
-// buttons up; main.js only has to call checkStreamDeps() at startup.
+// "streamlink/ffmpeg are missing" startup banner (see deps_check.rs). Checked
+// once at startup; if either is missing, offers to install both via winget in-
+// app. Self-contained; main.js just calls checkStreamDeps().
 
 import { invoke } from "@tauri-apps/api/core";
 

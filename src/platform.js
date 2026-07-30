@@ -1,17 +1,8 @@
-// Platform mode: "twitch" (default) or "kick", flipped by the header
-// toggle next to Browse. One module owns the state so home/browse/
-// sidebar/main all agree. The choice deliberately does NOT survive
-// restarts: the app always launches in Twitch mode, and Kick is an
-// opt-in flip per session.
-//
-// The design principle for Kick mode is that the FRONTEND stays
-// platform-dumb: the Rust side normalizes every Kick payload into
-// Helix-shaped objects (see the discovery section of kick.rs), so the
-// card renderers/grids never branch. All this module adds on top of
-// state is feedInvoke(), a one-line indirection that swaps a Twitch
-// feed command's NAME for its Kick counterpart when Kick mode is on -
-// same arguments, same response envelope, by construction on the Rust
-// side.
+// Platform mode: "twitch" (default) or "kick", flipped by the header toggle.
+// One module owns the state so every feed agrees; it resets to Twitch on each
+// launch. The frontend stays platform-dumb (Rust normalizes Kick into Helix-
+// shaped objects), so all this adds is feedInvoke(), which swaps a feed
+// command's name for its Kick counterpart in Kick mode.
 
 import { invoke } from "@tauri-apps/api/core";
 

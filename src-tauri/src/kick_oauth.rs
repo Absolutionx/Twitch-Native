@@ -1,53 +1,10 @@
 // Kick OAuth 2.1 (Authorization Code + PKCE) and authenticated chat send.
-//
-// This is the Kick counterpart of oauth.rs, and it reuses that module's
-// hard-won native-app strategy wholesale (see oauth.rs's header for the
-// full why): a local 127.0.0.1 TCP server catches the browser redirect,
-// because opening the provider's login page inside a Tauri WebView2
-// popup fails on the app CSP and the global prevent_close handler. Read
-// oauth.rs first; this file only documents where Kick DIFFERS.
-//
-// DIFFERENCES FROM TWITCH (oauth.rs):
-//
-//  1. Flow: Kick is OAuth 2.1 Authorization CODE + PKCE, not implicit.
-//     Twitch handed us the token straight back in the URL #fragment;
-//     Kick hands back a short-lived `code` in the QUERY string, which we
-//     then exchange (server-side POST to id.kick.com/oauth/token, with
-//     the PKCE code_verifier) for an access token + refresh token.
-//       - Query, not fragment, means NO browser bridge page is needed:
-//         the code reaches our local server directly as ?code=...&state=
-//         Simpler than oauth.rs's /token?t= hop.
-//       - PKCE: we generate a random code_verifier, send its SHA-256
-//         (base64url, no padding) as code_challenge on the authorize URL,
-//         and present the verifier at token-exchange time. Held in a
-//         Mutex between the two steps (single in-flight login at a time).
-//       - state: random, checked on redirect (CSRF guard).
-//
-//  2. Kick requires a CLIENT SECRET even in the PKCE flow (verified
-//     across every current Kick OAuth library). Twitch's implicit flow
-//     had none. A secret embedded in a distributed binary is not truly
-//     secret - but Kick's token endpoint rejects the exchange without
-//     it, so there's no alternative for a desktop app short of shipping
-//     a proxy server. Kept in source with eyes open, exactly like a
-//     desktop Spotify/Discord client does. See CLIENT_SECRET's comment.
-//
-//  3. Two servers, two hosts: auth is id.kick.com, the REST API (users,
-//     chat send) is api.kick.com. Both are the PUBLIC API on a separate
-//     origin from kick.com itself, and - unlike the kick.com/api/v2
-//     endpoints in kick.rs - they are NOT behind Cloudflare's bot check,
-//     so plain reqwest works here. No curl subprocess needed (contrast
-//     kick.rs, which must shell out to curl for kick.com).
-//
-//  4. Tokens expire in ~1h and come with a refresh token. We persist
-//     both and refresh on demand (send_chat sees a 401 -> refresh ->
-//     retry once). Twitch's implicit token was long-lived with no
-//     refresh, so oauth.rs never needed this.
-//
-// Distinct redirect PORT (17544) from oauth.rs's 17543 so a Kick login
-// and a Twitch login can't collide on the bind, and so each provider's
-// dev-console redirect URI is unambiguous. Register
-// http://localhost:17544/ as the redirect URI on the Kick app at
-// https://kick.com/settings/developer.
+// Kick's counterpart to oauth.rs; see that file for the local-redirect-server
+// strategy. Differences: authorization-code + PKCE (not implicit), requires a
+// client secret even for PKCE, separate hosts (id.kick.com for auth,
+// api.kick.com for REST, neither behind Cloudflare so plain reqwest works),
+// and ~1h tokens refreshed on demand. Redirect port 17544 (Twitch uses 17543);
+// register http://localhost:17544/ at https://kick.com/settings/developer.
 
 use std::sync::Mutex;
 

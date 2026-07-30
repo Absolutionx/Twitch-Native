@@ -1,35 +1,12 @@
-// Spawns streamlink as a subprocess and relays its remuxed stdout over a
-// minimal local HTTP server, so the webview can fetch() it as a normal
-// same-machine HTTP request and feed the bytes into a <video> element via
-// Media Source Extensions (see src/stream-player.js).
+// Spawns streamlink and relays its stdout over a local HTTP server on
+// 127.0.0.1, so the webview can fetch() it (same-origin, no CORS) and feed
+// the bytes to a <video> via MSE (see src/stream-player.js). streamlink is a
+// plain process, so unlike a webview fetch of usher.ttvnw.net it isn't subject
+// to CORS.
 //
-// WHY THIS EXISTS (the third architecture in this app's history):
-//   1. mpv embedded as a native Win32 child window (original) - video
-//      painted over webview content regardless of CSS z-index, so overlay
-//      controls were impossible.
-//   2. hls.js fetching usher.ttvnw.net directly from the webview (first
-//      migration attempt) - blocked by CORS, since Twitch's CDN doesn't
-//      send Access-Control-Allow-Origin and browsers enforce that
-//      regardless of any CSP configuration on our end.
-//   3. THIS: streamlink (a plain OS process, not a browser - CORS doesn't
-//      apply to it) resolves and remuxes the stream as before, writes to
-//      its own stdout, and this module relays those bytes to the webview
-//      over plain HTTP on 127.0.0.1. That's a request to a server we
-//      control on the same machine, not a cross-origin request the way
-//      usher.ttvnw.net was, so CORS never enters the picture.
-//
-// Streamlink's Twitch plugin outputs either MPEG-TS or fragmented MP4
-// depending on the channel, CDN path, and streamlink version. MSE only
-// accepts fragmented MP4. To handle both formats transparently, this
-// relay now pipes streamlink's stdout through ffmpeg (`-c copy`, no
-// re-encode) before the bytes enter the broadcast/cache pipeline:
-//
-//   streamlink --stdout  →  ffmpeg (remux to fMP4)  →  broadcast relay
-//
-// ffmpeg's `-movflags frag_keyframe+empty_moov+default_base_moof` flags
-// guarantee a moov box appears at the start of the output and every
-// fragment is self-contained, which is exactly what MSE's SourceBuffer
-// requires. ffmpeg must be installed and on PATH.
+// streamlink outputs MPEG-TS or fMP4 depending on channel/CDN; MSE needs fMP4,
+// so we pipe through ffmpeg (`-c copy` remux, movflags frag_keyframe+
+// empty_moov+default_base_moof) before broadcasting. ffmpeg must be on PATH.
 
 use std::collections::VecDeque;
 use std::process::Stdio;
@@ -1552,50 +1529,24 @@ async fn handle_connection(
     };
 
 
-    // Decide what catch-up bytes this connection gets before the live
-    // broadcast takes over.
-    //
-    //   Contiguous cache (no eviction yet - every first-connection case,
-    //   and any extra consumer joining within the overflow window):
-    //   init_bytes + overflow verbatim, the original behavior.
-    //
-    //   Gapped cache (eviction happened - a LATE joiner, in practice the
-    //   PiP window opening minutes into a session): init_bytes followed
-    //   by post-eviction overflow has a multi-MB hole in the middle, and
-    //   that non-contiguous byte stream is precisely the
-    //   CHUNK_DEMUXER_ERROR_APPEND_FAILED black screen the cache doc
-    //   comment warns about. Instead, rebuild a decodable stream from
-    //   what we do have: the true init segment (ftyp+moov, parsed out of
-    //   init_bytes' head) followed by cached data starting at a
-    //   validated moof fragment boundary - everything between is
-    //   discarded, which is fine: it's video the late joiner was never
-    //   going to see anyway. If either parse fails (a pipeline layout
-    //   the box walker doesn't understand), fall back to the contiguous
-    //   payload - degraded to today's behavior, never worse.
+    // Decide the catch-up bytes this connection gets before going live.
+    // Contiguous cache (first connection, or joining within the overflow
+    // window): init_bytes + overflow verbatim. Gapped cache (a late joiner,
+    // e.g. PiP opening mid-session): init + post-eviction overflow has a hole
+    // that decodes to a black screen, so rebuild from the true init segment
+    // plus cached data at a validated moof boundary; fall back to the
+    // contiguous payload if a parse fails.
     let overflow_total: usize = overflow_chunks.iter().map(|c| c.len()).sum();
     let want_trim = cache_has_gap || overflow_total > SNAPSHOT_TAIL_TRIM_THRESHOLD;
-    // Three tiers, tried in order of how much we trust them:
-    //
-    //   1. Walker-aligned: LATEST init + newest fragment, both from the
-    //      pump's box walker - exact facts recorded as the bytes flowed.
-    //   2. Re-derived: when the walker can't answer (desynced, init
-    //      capture incomplete, offset math diverged from the cache),
-    //      re-derive the boundary from the cached bytes themselves via
-    //      validate_box_chain - a full forward-chain validation, which
-    //      is what the old unvalidated pattern-match guess lacked. The
-    //      init comes from the window itself if a mid-stream pipeline
-    //      restart left one there (the freshest truth), else the
-    //      walker's latest complete init, else the session head.
-    //   3. Full contiguous payload - but ONLY when the cache is really
-    //      contiguous. The old code served init_bytes + overflow here
-    //      even when cache_has_gap, and a gapped byte stream is exactly
-    //      the CHUNK_DEMUXER_ERROR_APPEND_FAILED poison this struct's
-    //      docs warn about - worse, the walker's unavailability is
-    //      sticky, so the client burned its whole 5-attempt reattach
-    //      budget receiving the identical poison each time (confirmed
-    //      in the field via the PiP console log). Gapped + underivable
-    //      now refuses with a 503 instead: the client's existing retry
-    //      lands on a fresher cache where derivation can succeed.
+    // Three tiers, most-trusted first:
+    //   1. Walker-aligned: latest init + newest fragment from the box walker.
+    //   2. Re-derived: when the walker can't answer, re-derive the boundary
+    //      from the cached bytes via validate_box_chain (init from the window,
+    //      the walker's latest, or the session head).
+    //   3. Full contiguous payload - only when the cache is truly contiguous;
+    //      a gapped stream is the CHUNK_DEMUXER_ERROR_APPEND_FAILED poison. If
+    //      gapped and underivable, refuse with a 503 so the client retries
+    //      against a fresher cache.
     let decided: Option<(Vec<u8>, Vec<Arc<[u8]>>, String)> = if want_trim {
         // Flattened once; both the walker-aligned path and the
         // re-derivation recovery index into the same window.

@@ -1,17 +1,5 @@
-// System tray icon and menu.
-//
-// The tray is the app's "bring me back / quit me" affordance: restore on
-// double-click or the Open menu item, and Quit. It's also what the
-// single-instance plugin routes a second launch through (see main.rs) -
-// one consistent "bring the running app to the front" path.
-//
-// HISTORY: this module used to also own a background go-live polling loop
-// (run_live_polling + TrayPollingState), spawned by a hide_to_tray command
-// when the user picked "Minimize to Tray" in a close dialog. That whole
-// feature is gone: the close dialog no longer exists (closing the window
-// closes the app), and go-live notifications are handled by the frontend
-// now - sidebar.js diffs live state on its refresh tick and fires
-// sendNotification itself, which works the entire time the app is open.
+// System tray icon and menu: restore (double-click / Open) and Quit. Also the
+// path the single-instance plugin routes a second launch through (see main.rs).
 
 use tauri::{AppHandle, Manager};
 

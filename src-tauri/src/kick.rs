@@ -1,31 +1,11 @@
-// Kick.com live-status lookup for Twitch -> Kick failover.
+// Kick.com live-status lookup for Twitch -> Kick failover (see tryKickFailover
+// in main.js). Uses Kick's unofficial v2 channel endpoint, which sits behind
+// Cloudflare; every error reports rather than panics, and the frontend reads
+// any Err as "couldn't check", never "offline".
 //
-// Some streamers simulcast on Twitch and Kick and keep only the Kick
-// stream going after ending the Twitch one (commonly for content Twitch
-// doesn't permit). When the Twitch stream ends mid-watch, main.js asks
-// this module whether the same slug is live on Kick and, if so, switches
-// the player to Kick's HLS feed - see tryKickFailover in main.js for the
-// frontend half and the exact conditions under which the switch happens.
-//
-// Uses Kick's unofficial v2 channel endpoint - the same one kick.com's
-// own web frontend calls, but it IS unofficial: it sits behind Cloudflare
-// and can start challenging non-browser clients at any time. Every error
-// path here therefore reports rather than panics, and the frontend treats
-// any Err as "couldn't check" (no failover), never as "offline".
-//
-// TRANSPORT: curl subprocess first, reqwest as fallback - not the other
-// way around, and not reqwest alone (which is what this module originally
-// did). Cloudflare's bot check on kick.com fingerprints the TLS handshake
-// itself (JA3/JA4), not just headers, so reqwest's rustls handshake gets
-// a 403 no matter what User-Agent it sends - that's the "[kick]
-// offline-entry live check failed: Kick API returned 403 Forbidden" that
-// this transport switch fixes. curl's TLS fingerprint currently passes
-// Kick's Cloudflare tier (the same trick the published kick-api crate
-// uses for this exact endpoint, and curl ships with Windows 10 1803+ and
-// macOS out of the box - and this app already shells out to streamlink/
-// ffmpeg, so a subprocess is nothing new here). reqwest is kept only as
-// the fallback for machines with no curl on PATH, where it's better than
-// nothing: it may still succeed when/where Cloudflare is being lenient.
+// Transport: curl subprocess first, reqwest fallback. Cloudflare fingerprints
+// the TLS handshake (JA3/JA4), so reqwest's rustls handshake gets a 403 while
+// curl's passes. reqwest stays as a fallback for machines without curl.
 
 use std::sync::Arc;
 
@@ -647,34 +627,19 @@ async fn fetch_via_reqwest(url: &str) -> Result<Option<serde_json::Value>, Strin
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Kick discovery: home feed / browse / search, for the platform toggle.
+// Kick discovery: home / browse / search for the platform toggle.
 //
-// Everything below feeds the SAME frontend renderers the Twitch feeds
-// use (home.js, browse.js, sidebar.js) - the entire adaptation happens
-// here, once, by normalizing Kick's payloads into Helix-shaped objects
-// (user_login/title/viewer_count/game_name/thumbnail_url/...). The
-// frontend's platform.js just swaps command names; the card builders
-// never learn Kick exists. Two Kick-only extras ride along on each
-// object: `platform: "kick"` (so click handlers route to the Kick watch
-// path) and `profile_image_url` (Kick embeds avatars in stream payloads
-// where Helix needs a second get_users_info call - hydrateAvatars seeds
-// from this field and skips the Twitch lookup for kick:* ids).
+// Normalizes Kick's payloads into Helix-shaped objects so the same frontend
+// renderers (home.js, browse.js, sidebar.js) work unchanged - platform.js just
+// swaps command names. Each object also carries platform:"kick" (for click
+// routing) and profile_image_url (Kick embeds avatars, skipping a get_users_
+// info call).
 //
-// Endpoints are the unofficial ones kick.com's own frontend uses, same
-// Cloudflare tier as /api/v2/channels (so everything rides
-// fetch_kick_json's curl transport):
-//   /api/v2/featured-livestreams/en?limit=N      top/featured live
-//   /stream/livestreams/en?page=&limit=&...      live list; filters:
-//       subcategory={slug} (one category), category={games|irl|music|
-//       gambling|creative} (top-level group)
-//   /api/v1/categories/top?limit=&page=          top categories
-//   /api/search?searched_word=                   site search
-//
-// All of them are undocumented and Kick has changed their schemas
-// before, so every extractor below tries the known field spellings in
-// order and degrades per-item (a stream that can't be normalized is
-// skipped, not fatal) - a schema drift should thin the grid, never
-// blank the app.
+// Endpoints are kick.com's own unofficial ones (curl transport, same as
+// fetch_kick_json): featured-livestreams, stream/livestreams (with subcategory/
+// category filters), categories/top, and search. All undocumented, so every
+// extractor tries known field spellings and degrades per-item - schema drift
+// thins the grid, never blanks the app.
 
 /// Minimal percent-encoder for query VALUES (RFC 3986 unreserved set
 /// kept literal). No dependency pulled in for this - the app only

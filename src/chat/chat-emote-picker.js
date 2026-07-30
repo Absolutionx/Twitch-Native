@@ -75,8 +75,8 @@ export const chatEmotePickerMixin = {
   /** Wires up the button + flyout. Called once from the constructor,
    * same as the emote-autocomplete popup's own setup - see chat.js. */
   _initEmotePicker() {
-    this.emoteBtn = document.getElementById("chat-emote-btn");
-    this._emotePickerMenu = document.getElementById("emote-picker-menu");
+    this.emoteBtn = this._emoteBtnEl;
+    this._emotePickerMenu = this._emotePickerMenuEl;
     this._emotePickerTab = "all";
     this._emotePickerSearch = "";
     if (!this.emoteBtn || !this._emotePickerMenu) return; // absent in tests/older markup - every call site below already guards on this.emoteBtn
@@ -138,7 +138,7 @@ export const chatEmotePickerMixin = {
     // Anchor to the whole input row (not just the textarea) so the panel
     // lines up with the Send button's right edge, same width as the
     // composer as a whole rather than just the textarea's own box.
-    const rect = (this.inputEl.closest(".chat-input-row") || this.inputEl).getBoundingClientRect();
+    const rect = (this.inputEl.closest(".chat-input-row, .multiview-chat-input-row") || this.inputEl).getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) { this._closeEmotePicker(); return; }
     const menuHeight = menu.offsetHeight || 360;
     menu.style.left = rect.left + "px";

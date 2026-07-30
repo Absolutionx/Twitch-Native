@@ -1,17 +1,7 @@
-// update-banner.js — the "a new version is available" banner + one-click
-// in-app update. Windows only.
-//
-// The Tauri updater plugin is registered only on Windows (see main.rs), so
-// check() here would just error on macOS/Linux - we skip it entirely on
-// those platforms. macOS is distributed via the GitHub Actions .dmg and
-// updates by re-downloading, not through this path.
-//
-// Flow: on startup, ask the updater if a newer version exists (compared to
-// the running app's version, against the latest.json on GitHub Releases).
-// If so, show a banner with an "Update now" button. Clicking it downloads
-// and installs the update with a live progress readout, then relaunches
-// into the new version - all without leaving the app.
-//
+// "Update available" banner + one-click in-app update. Windows only (the Tauri
+// updater plugin is registered only there; macOS updates by re-downloading the
+// .dmg). On startup it checks latest.json on GitHub Releases; if newer, shows a
+// banner whose button downloads, installs, and relaunches.
 // Self-contained like deps-banner.js: owns its DOM and listeners, shares
 // no state. main.js just calls checkForUpdate() at startup.
 
@@ -121,6 +111,10 @@ export async function checkForUpdate() {
 
     hideUpdateBanner();
     _bannerEl = buildBanner(update.version, onUpdate);
+    // If the dependency banner is currently showing (also fixed to the top),
+    // stack below it instead of overlapping.
+    const depsVisible = document.getElementById("deps-banner")?.offsetParent !== null;
+    if (depsVisible) _bannerEl.classList.add("below-deps");
     appEl.appendChild(_bannerEl);
   } catch (err) {
     // No endpoint yet, offline, not configured, wrong platform - all fine.

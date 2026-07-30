@@ -1,28 +1,8 @@
-// Browse / directory page - shown inside #video-column (same slot as
-// #home-feed) when the "Browse" nav tab is active. Rebuilt to mirror
-// twitch.tv/directory's own layout: a page title, the 4 sub-directory
-// pills (Games/IRL/Music & DJs/Talk Shows & Podcasts), a Categories/Live
-// Channels tab switcher, a category search box, a sort-by control, and
-// the categories/streams grid itself.
-//
-// Three levels deep, like the real directory:
-//   1. Top-level: either the Categories grid (get_top_games) or the
-//      Live Channels grid (get_top_live_streams), depending on which
-//      tab is active.
-//   2. Click a category card -> live streams grid for that game_id
-//      (get_streams_for_game_id -> /helix/streams?game_id=).
-//   3. Click a pill (IRL/Music & DJs/Talk Shows & Podcasts) -> live
-//      streams grid for that ONE specific category, same as
-//      twitch.tv/directory/irl etc - these are real, single Twitch
-//      categories, not groupings (see PILL_CATEGORIES below). "Games"
-//      has no single-category equivalent (it's everything that isn't
-//      the other three), so it just returns to the Categories grid
-//      instead of drilling into a stream list. There is deliberately no
-//      "Esports" pill - see PILL_CATEGORIES' comment for why.
-//
-// Routed through Rust the same way home.js/sidebar.js are - see
-// sidebar.js's header comment for why this can't just be fetch() from the
-// webview directly.
+// Browse / directory page (in #video-column when the Browse tab is active),
+// mirroring twitch.tv/directory: pills, a Categories/Live Channels switcher,
+// search, sort, and the grid. Three levels: categories or live-channels grid ->
+// a category's streams -> a pill's single category. Routed through Rust like
+// home.js/sidebar.js (see sidebar.js for why not a direct webview fetch).
 
 import { invoke } from "@tauri-apps/api/core";
 import { feedInvoke, isKick } from "./platform.js";
@@ -49,29 +29,11 @@ const SEARCH_DEBOUNCE_MS = 300;
 // see blank space.
 const SCROLL_TRIGGER_PX = 600;
 
-// The 3 sub-directory pills that map to one real, single Twitch category
-// each (IRL, Music & DJs, Talk Shows & Podcasts aren't groupings of many
-// categories - Twitch broke those up into specific categories back in
-// 2018, confirmed against
-// https://www.twitch.tv/directory/category/talk-shows-and-podcasts, which
-// is its own real category). "Games" is deliberately not in this list -
-// it has no single-category equivalent (it's "everything else"), so
-// clicking it shows this page's own Categories grid instead.
-//
-// There is NO "esports" pill here on purpose - twitch.tv/directory/esports
-// isn't a category, it's an aggregate view spanning many game categories,
-// identified by a tag rather than a category name. Helix has no
-// general-purpose "streams matching this tag" endpoint (the old
-// tag_id-based filtering was decommissioned in 2023), so an "Esports"
-// pill mapped to a literal category name (the previous bug here) always
-// returned zero results. Rather than fake an approximation by
-// hand-picking esports-heavy game categories, the pill was removed
-// outright - a misleading pill is worse than no pill.
-//
-// Exact category names matter here - they're looked up via Helix's
-// exact-name resolution (get_streams_for_game_names, /helix/games?name=),
-// not fuzzy search, so a name that doesn't match Twitch's own category
-// name exactly silently returns zero streams.
+// Sub-directory pills, each mapping to one real Twitch category (IRL, Music &
+// DJs, Talk Shows & Podcasts are all single categories since 2018). "Games" is
+// omitted (it's "everything else", so it shows the Categories grid), and there's
+// no "Esports" pill - it's a tag-based aggregate with no Helix endpoint. Names
+// must match Twitch's exactly (exact-name lookup, not fuzzy search).
 const PILL_CATEGORIES = {
   irl: "IRL",
   music: "Music",

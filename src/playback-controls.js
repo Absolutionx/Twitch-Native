@@ -1,27 +1,8 @@
-// Custom playback controls for the in-DOM <video> element, fed via Media
-// Source Extensions from the local Rust-side relay server (see
-// src-tauri/src/stream_relay.rs and src/stream-player.js).
-//
-// This file has gone through two prior versions:
-//   1. The original mpv-based version, which talked to a separately-
-//      spawned native mpv process over a JSON IPC pipe (now-deleted
-//      mpv_ipc.rs) because mpv's own on-screen controller couldn't be
-//      styled/positioned reliably inside the embedded window.
-//   2. An hls.js-based version that loaded Twitch's usher.ttvnw.net HLS
-//      manifest directly into hls.js - this got overlay controls working
-//      (the actual point of moving off mpv) but was blocked by CORS,
-//      since Twitch's CDN doesn't send Access-Control-Allow-Origin and
-//      browsers enforce that regardless of any CSP configuration.
-//
-// THIS version: streamlink resolves/remuxes the stream (sidestepping
-// CORS entirely, since it's a plain OS process, not a browser) and its
-// output is relayed over a local HTTP server; this file feeds those
-// bytes into the <video> element via attachMseStream() instead of
-// hls.js, since hls.js has no mode for "just keep appending a continuous
-// byte stream with no manifest." Every control below still talks
-// directly to the standard HTMLMediaElement API (video.play(),
-// video.currentTime, video.volume, etc.) - none of that changed across
-// any of these three versions.
+// Custom playback controls for the <video> element, fed via MSE from the local
+// relay (stream_relay.rs, stream-player.js). streamlink's remuxed output is
+// relayed over local HTTP and appended to the element with attachMseStream()
+// (hls.js has no "append a continuous byte stream with no manifest" mode).
+// Controls use the standard HTMLMediaElement API.
 
 import { invoke } from "@tauri-apps/api/core";
 import { fetchVodChapters, fetchVodSeekPreviewsUrl } from "./chapters.js";
@@ -281,33 +262,12 @@ export class PlaybackControls {
     this.cachedQualities = null;
     this._qualitiesPromise = null;
 
-    // Auto quality mode: monitors network conditions and steps quality
-    // down OR up to match them, similar to Twitch's own adaptive quality.
-    // _autoTierIdx is an index into _autoQualityTiers() (ascending order);
-    // -1 means we're at 'best' (highest available).
-    //
-    // Step-down (the original half of this feature) reacts to sustained
-    // buffering - see _handleAutoStall()/_stepDownAutoQuality() below -
-    // and is the more trustworthy signal of the two: an actual stall
-    // means the current tier demonstrably didn't fit, no estimate needed.
-    //
-    // Step-up (added later) can't use the same signal - the absence of a
-    // stall just means the CURRENT tier is fine, it says nothing about
-    // whether a higher tier would also be fine. So it instead polls
-    // navigator.connection.downlink (a rough, Chromium-only bandwidth
-    // estimate - see _estimateDownlinkMbps()) on a timer, and only steps
-    // up when that estimate comfortably clears the next tier's typical
-    // bitrate AND no stall has happened recently - see
-    // _maybeStepUpAutoQuality() for the full reasoning on both gates and
-    // why each is needed.
-    //
-    // Both directions restart the whole stream (this app relaunches
-    // streamlink rather than doing seamless in-player ABR switching), so
-    // both are deliberately conservative/debounced rather than reacting
-    // to every brief fluctuation - a wrong step-down costs a few seconds
-    // of stalled video either way, but a wrong step-up costs a visible
-    // restart AND likely immediately stalls again, so it errs further
-    // toward "wait and confirm" than step-down does.
+    // Auto quality: step down on sustained buffering (_handleAutoStall), step
+    // up when navigator.connection.downlink clears the next tier's bitrate and
+    // there's been no recent stall (_maybeStepUpAutoQuality). _autoTierIdx
+    // indexes _autoQualityTiers() ascending; -1 = 'best'. Each switch restarts
+    // streamlink (no in-player ABR), so both directions are debounced, step-up
+    // more conservatively than step-down.
     this.autoQualityMode = false;
     this._autoTierIdx = -1;
     this._autoStallCount = 0;
@@ -415,29 +375,15 @@ export class PlaybackControls {
     });
   }
 
-  /**
-   * @param {string} channel - the channel currently being watched.
-   * @param {string} relayUrl - the local relay server URL returned by the
-   *   start_stream Tauri command (see stream_relay.rs) -
-   *   something like http://127.0.0.1:PORT/stream, NOT a Twitch URL.
-   * @param {string} quality - initial quality label, just for the
-   *   settings-menu's initial "active" highlight. Quality switching
-   *   itself is handled by streamlink on the Rust side (a fresh
-   *   start_stream call with a different quality), not in this file -
-   *   see selectQuality() below.
-   * @param {number} vodTotalSeconds - Helix's reported VOD duration, used
-   *   as ground truth for the VOD seek bar (see pollProgress).
-   * @param {object} [opts]
-   * @param {boolean} [opts.kickVod] - this VOD is a Kick recording played
-   *   straight off Kick's (proxied) master playlist, not a Twitch archive.
-   *   Seeks/progress are identical (the isVod hls.js path is
-   *   platform-agnostic), but every Twitch-specific side fetch must not
-   *   fire: the streamlink quality probe (would probe twitch.tv for a
-   *   Kick uuid), GQL chapters, and the storyboard lookup. Quality
-   *   selection instead reuses the Kick-session hls.js LEVEL menu
-   *   (_isKickSession -> _loadKickQualityMenu), which reads renditions
-   *   right out of the master playlist hls.js already parsed.
-   */
+  // @param channel          the channel being watched
+  // @param relayUrl         local relay URL from start_stream (127.0.0.1:PORT)
+  // @param quality          initial quality label (highlight only; switching is
+  //                         a fresh start_stream on the Rust side)
+  // @param vodTotalSeconds  Helix VOD duration, ground truth for the seek bar
+  // @param opts.kickVod     Kick recording off a proxied master playlist. Seeks
+  //                         are identical, but Twitch-only side fetches (quality
+  //                         probe, chapters, storyboard) must not fire; quality
+  //                         uses the hls.js level menu instead.
   start(channel, url, quality = "best", vodTotalSeconds = 0, startPositionSecs = 0, opts = {}) {
     const kickVod = Boolean(opts.kickVod);
     // macOS native-HLS live path (see attachStream): live m3u8 via hls.js
@@ -586,30 +532,13 @@ export class PlaybackControls {
     }
   }
 
-  /** Switches to HLS.js on a VOD URL for live-DVR mode. Tears down the MSE
-   * relay, attaches HLS.js at the given VOD offset. Does NOT change isVod
-   * so the live UI (Live button, etc) stays visible.
-   *
-   * No storyboard/hover-thumbnail fetch here (unlike start(), for a real
-   * VOD) - tried it, confirmed via testing that Twitch's storyboard CDN
-   * 403s for the underlying VOD while the broadcast is still live, even
-   * with the Referer header that fixed the same endpoint for finished
-   * VODs. Storyboards likely aren't generated (or exposed) until a
-   * broadcast actually ends and finalizes as a real VOD. */
-  /**
-   * Starts playback of a Kick HLS feed (the Twitch -> Kick failover -
-   * see attachKickStream in main.js, which is the only caller). This is
-   * start()'s per-session bookkeeping WITHOUT its attachStream call:
-   * for a non-"vod:" channel attachStream goes to the MSE relay, which
-   * only speaks the local Twitch relay's output - a Kick source is a
-   * plain live HLS playlist, played through hls.js exactly like
-   * live-DVR is, hence attachHlsDvr with -1 (hls.js's "default" start
-   * position = the live edge for live playlists).
-   *
-   * Used by BOTH failover entry points (mid-session stream-end and
-   * offline-channel entry) so the two land in the identical player
-   * configuration: active, isVod=false, hls.js feeding, live UI shown.
-   */
+  // Switch to hls.js on a VOD URL for live-DVR: tear down the MSE relay, attach
+  // at the given offset, keep isVod false so the live UI stays. No storyboard
+  // fetch - Twitch's storyboard CDN 403s for an in-progress broadcast's VOD.
+  // Start a Kick HLS feed (Twitch -> Kick failover; attachKickStream in main.js
+  // is the only caller). start()'s bookkeeping minus attachStream: Kick is a
+  // plain live HLS playlist, so it plays through hls.js (attachHlsDvr at -1 =
+  // live edge). Both failover entry points land here for an identical config.
   startKick(channel, url) {
     this.active = true;
     if (channel !== this.currentChannel) {
@@ -1783,25 +1712,11 @@ export class PlaybackControls {
     return RESOLUTION_MBPS[nearest] * scale;
   }
 
-  /**
-   * Polled every STEP_UP_CHECK_MS while auto mode is active. Steps up
-   * exactly one tier (never jumps straight to 'best') when ALL of:
-   *   - not already at the top tier ('best' / -1, or the highest
-   *     specific tier in _autoQualityTiers())
-   *   - no stall in at least the last STEP_UP_MIN_QUIET_MS
-   *   - navigator.connection.downlink is available AND clears the NEXT
-   *     tier's typical bitrate by STEP_UP_HEADROOM
-   *
-   * One tier at a time (rather than jumping to whatever the estimate
-   * could theoretically support) means a wrong guess only costs one
-   * restart to find out, not several; the next poll will keep climbing
-   * if conditions hold.
-   *
-   * No downlink support (estimateDownlinkMbps() returns null) means this
-   * always no-ops - step-up simply never happens on Firefox/Safari, which
-   * still leaves them with the original step-down-only behavior rather
-   * than guessing blind.
-   */
+  // Polled while auto mode is active. Steps up one tier (never straight to
+  // 'best') when: not already at top, no stall in STEP_UP_MIN_QUIET_MS, and
+  // navigator.connection.downlink clears the next tier's bitrate by
+  // STEP_UP_HEADROOM. One tier at a time so a wrong guess costs one restart.
+  // No downlink support (Firefox/Safari) means this no-ops, leaving step-down.
   _maybeStepUpAutoQuality() {
     if (!this.autoQualityMode) return;
     if (this._autoTierIdx === -1) return; // already at 'best'
@@ -2150,32 +2065,11 @@ export class PlaybackControls {
     return this._getActualBufferedRange();
   }
 
-  /**
-   * Seeks live playback within whatever the MSE feeder has actually
-   * buffered so far - VOD seeking (the other branch below) has no such
-   * limit, since HLS.js can fetch any arbitrary segment on demand.
-   *
-   * IMPORTANT LIMITATION, live only, TWITCH SPECIFIC: streamlink emits
-   * one continuous byte stream starting near the live edge, with no way
-   * to jump back to a point already evicted from the browser's own MSE
-   * buffer - unlike HLS.js, there's no on-demand segment fetching to
-   * fall back on. Setting currentTime outside what's buffered just
-   * stalls the <video> element waiting for data that will never arrive.
-   * The buffered window also isn't "everything since you joined":
-   * stream-player.js's trimBuffered() continuously evicts anything
-   * older than TRAILING_WINDOW behind the live playhead, so the
-   * practical rewind limit is always that window, however long you've
-   * been watching.
-   *
-   * Kick does NOT share this limitation despite going through the same
-   * branch below (_isKickSession): it runs on hls.js against its own
-   * live m3u8, which retains a real rolling DVR window server-side (how
-   * Kick's own web player offers rewind) - a seek anywhere still listed
-   * in that window just makes hls.js fetch the fragment fresh, exactly
-   * like scrubbing backward in a finite VOD. See _getKickSeekableRange
-   * and liveEdge (vod-player.js) for how this reaches that window
-   * instead of clamping at whatever's merely still decoded.
-   */
+  // Seek live playback within what the MSE feeder has buffered. Twitch live is
+  // limited to that window (streamlink emits one byte stream from the live edge;
+  // there's no on-demand segment fetch, and trimBuffered() evicts past
+  // TRAILING_WINDOW). Kick, though it shares this branch, has a real server-side
+  // DVR window via hls.js, so it can seek anywhere still in that window.
   seekToClickPosition(event) {
     const rect = this.seekBarTrack.getBoundingClientRect();
     const clickRatio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
@@ -2505,49 +2399,17 @@ export class PlaybackControls {
           `${this.formatDuration(vodPosSecs)} / ${this.formatDuration(total)}`;
       }
     } else {
-      // Normal live, not yet in DVR mode.
-      //
-      // videoEl.currentTime is relative to when THIS SESSION's relay
-      // attached (ffmpeg rebases fMP4 timestamps to ~0 per process, see
-      // stream_relay.rs) - it carries no notion of the broadcast's real
-      // elapsed time. seekable.end() sits on that same session-relative
-      // timeline, so `seekable.end() - currentTime` is always near-zero
-      // and measures buffering lag within the session, NOT how far behind
-      // the broadcast the viewer is. Hence the old "-0:06" while an hour
-      // behind live.
-      //
-      // So anchor against wall-clock instead: liveDvrStreamStartedAt (from
-      // Twitch's VOD created_at, or Kick's stream-start) fixes an absolute
-      // start the first time it's available, and drift is tracked from
-      // there. The anchor is derived from whatever currentTime happens to
-      // be at that moment, so it's agnostic to the underlying timeline -
-      // MSE's rebased-to-zero one for Twitch, hls.js's arbitrary media
-      // timeline for Kick. Only seek-past-buffer behavior differs between
-      // the two (see _isKickSession); this math doesn't care.
+      // Normal live, not yet in DVR mode. currentTime is session-relative
+      // (ffmpeg rebases fMP4 timestamps to ~0), so seekable.end() - currentTime
+      // measures buffering lag, not how far behind the broadcast you are. Anchor
+      // against wall-clock instead (liveDvrStreamStartedAt), derived from
+      // currentTime when first available so it's agnostic to the timeline.
       if (this.liveDvrStreamStartedAt) {
-        // Re-anchor when playback sits at the live edge of what's actually
-        // buffered, not just once per session.
-        //
-        // behindSeconds below works out to (wall-clock elapsed since the
-        // anchor) minus (media time advanced since the anchor), so ANY
-        // period where media time lags wall clock - a stall, a rebuffer, a
-        // pause, the stall-recovery seek in stream-player.js - is banked
-        // into the readout permanently and never paid back. That drift is
-        // unbounded, which is how a normal live session ended up showing
-        // things like "-11:36" even though this branch only ever runs for
-        // plain MSE playback, where trimBuffered() keeps a 120s trailing
-        // window and being more than ~2 minutes behind is impossible.
-        //
-        // It also explains why clicking Live didn't clear it: jumpToLive()
-        // seeks to the buffered end, which can only ever repay up to that
-        // 120s window, so a larger accumulated drift survived the click and
-        // the readout looked frozen while playback really was live.
-        //
-        // Sitting at the buffered end IS live for this session (that's the
-        // newest data the relay has handed over), so re-deriving the anchor
-        // there pins the readout back to "live" and makes the drift
-        // self-correcting. Seeking back within the buffer moves the
-        // playhead off the edge, freezing the anchor again so the readout
+        // Re-anchor whenever playback sits at the buffered live edge. Otherwise
+        // behindSeconds (wall-clock elapsed minus media time advanced) banks
+        // every stall/pause permanently and drifts unbounded. Sitting at the
+        // buffered end is "live" for this session, so re-anchoring there makes
+        // the readout self-correcting; seeking back freezes the anchor so it
         // correctly reports how far back the user went.
         const liveRange = this._getActualBufferedRange();
         const atBufferedLiveEdge =

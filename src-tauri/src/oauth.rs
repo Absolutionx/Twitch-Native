@@ -1,33 +1,14 @@
-// Twitch OAuth – browser-based implicit grant flow.
+// Twitch OAuth - browser-based implicit grant (RFC 8252 native-app flow).
 //
-// WHY NOT A TAURI WEBVIEW POPUP?
-// Previous versions opened a second Tauri WebviewWindow pointed at
-// https://id.twitch.tv/oauth2/authorize. Two fatal problems on
-// Windows/WebView2:
-//   1. Tauri's app-level CSP (default-src 'self'; …) applies to every
-//      WebView2 instance it controls, including that popup. Twitch's
-//      login page loads scripts/fonts/images from CDNs outside 'self',
-//      so they all get blocked → blank page.
-//   2. The global on_window_event handler calls api.prevent_close() for
-//      every window, so the popup's ✕ button is permanently broken.
+// A webview popup for login doesn't work: the app CSP blocks Twitch's login
+// CDNs, and the global prevent_close handler breaks the popup's close button.
+// Instead we open the auth URL in the system browser and catch the redirect
+// on a local tokio server (127.0.0.1:17543). Since the token comes back in the
+// URL #fragment (never sent to the server), the server serves a one-shot
+// bridge page whose JS reads the fragment and GETs /token?t=<token>; we then
+// emit "oauth-token" to the main window and shut down.
 //
-// THE FIX: RFC 8252 native-app OAuth via the system default browser.
-//   1. Spawn a tiny tokio TCP server on 127.0.0.1:17543.
-//   2. Open the Twitch auth URL in the user's real browser via the
-//      opener plugin - no CSP restrictions there, so login renders fine.
-//   3. After login, Twitch redirects to
-//      http://localhost:17543/#access_token=… The server serves a
-//      one-shot HTML bridge page.
-//   4. The bridge page JS reads location.hash (fragments never reach the
-//      server directly, hence the bridge page), extracts the token, and
-//      GETs /token?t=<token>.
-//   5. The server receives the token, emits "oauth-token" to the main
-//      Tauri window, and shuts down.
-//   6. The bridge page tells the user they can close the tab.
-//
-// Port 17543 is registered as an allowed redirect URI in the Twitch
-// developer console: http://localhost:17543 - if that port is busy on a
-// specific machine, change it here AND at
+// Port 17543 must match the redirect URI registered at
 // https://dev.twitch.tv/console/apps.
 
 use serde::{Deserialize, Serialize};

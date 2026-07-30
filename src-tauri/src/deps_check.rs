@@ -1,17 +1,7 @@
-// deps_check.rs — detects whether streamlink and ffmpeg are on PATH, and
-// on Windows, can install them via winget if missing.
-//
-// Neither is installed by the built app itself - Tauri's NSIS/MSI
-// bundler has no built-in "install another vendor's package" step, and
-// hand-writing that into a raw NSIS install script isn't something this
-// codebase can verify actually compiles/runs without a real Windows
-// build environment on hand. Doing it here instead, as a check the app
-// itself runs on startup and can act on, is testable the same way every
-// other command in this codebase is, and works identically regardless
-// of whether someone installed via the .msi, unzipped a portable build,
-// or is running via `cargo run` in dev - unlike an installer-time hook,
-// which only ever runs once, at install time, and couldn't recover if a
-// user later removed one of these tools some other way.
+// Detects whether streamlink and ffmpeg are on PATH and, on Windows, installs
+// them via winget if missing. Done as a startup check rather than an installer
+// step so it's testable, works for any install method (msi/portable/dev), and
+// can recover if a tool is removed later.
 
 use serde::Serialize;
 use tokio::process::Command;

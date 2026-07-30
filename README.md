@@ -6,7 +6,7 @@ chat (including BTTV/7TV emotes with zero-width overlay support and
 AutoMod), live-DVR seeking on in-progress streams, Picture-in-Picture, and
 a much smaller memory footprint than watching in a browser.
 
-> Not affiliated with or
+> **Status:** proof-of-concept / hobby project, not affiliated with or
 > endorsed by Twitch Interactive, Inc. or Kick.
 
 ## Why this exists

@@ -1,33 +1,12 @@
-// 7TV EventAPI WebSocket client.
+// 7TV EventAPI WebSocket client - subscribes to a channel's emote set for
+// real-time add/remove/rename, since chat.js only fetches the set once at join.
+// Push-based, like eventsub.rs but against 7TV's unauthenticated EventAPI.
 //
-// chat.js's loadSevenTvChannelEmotes() only fetches a channel's 7TV emote
-// set once, at join time - so mid-stream additions/removals (e.g. a
-// streamer temporarily unlocking an emote via channel points) never
-// showed up. This subscribes to that emote set's changes in real time
-// instead, mirroring the "push, not poll" approach eventsub.rs uses for
-// Twitch's own events, against 7TV's separate, unauthenticated EventAPI.
-//
-// Protocol (see https://github.com/SevenTV/EventAPI):
-//   1. Connect to wss://events.7tv.io/v3.
-//   2. Server sends Hello (op 1) with heartbeat_interval (ms) and a
-//      session_id (unused - see the Resume note below).
-//   3. We send Subscribe (op 35) for type "emote_set.update" with
-//      condition {"object_id": <the 7TV emote set's id, not the Twitch
-//      user id>}.
-//   4. Server sends Heartbeat (op 2) periodically; if 3 consecutive
-//      intervals pass with no traffic at all (heartbeat or dispatch), the
-//      connection is considered dead per spec and we reconnect.
-//   5. Server sends Dispatch (op 0) on changes. `pushed`/`pulled` cover
-//      emotes added/removed - the primary case this exists to catch.
-//      `updated` covers in-place edits (e.g. a rename).
-//   6. Server can send Reconnect (op 4), handled the same way as Twitch
-//      EventSub's session_reconnect in eventsub.rs.
-//
-// On reconnect we re-subscribe from scratch rather than using Resume (op
-// 34): for a single subscription, re-subscribing is no more expensive
-// than resuming and avoids persisting a session_id for a marginal
-// benefit (replaying a few missed dispatches) - worst case, the next
-// change after a reconnect gap still arrives correctly.
+// Protocol (https://github.com/SevenTV/EventAPI): connect wss://events.7tv.io/
+// v3; Hello (op 1) gives heartbeat_interval; Subscribe (op 35) to
+// "emote_set.update" keyed on the emote set's object_id; Dispatch (op 0)
+// carries pushed/pulled/updated changes; reconnect on Reconnect (op 4) or 3
+// missed heartbeats. We re-subscribe from scratch rather than Resume.
 
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;

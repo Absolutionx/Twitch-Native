@@ -20,6 +20,7 @@ import { rememberSession, forgetSession, restoreSession } from "./session-restor
 import { formatViewerCount } from "./format.js";
 import { checkStreamDeps } from "./deps-banner.js";
 import { checkForUpdate } from "./update-banner.js";
+import { MultiView } from "./multiview.js";
 import { updateDropsBanner, hideDropsBanner, resetDropsDismissal } from "./drops-banner.js";
 import {
   initLayout, switchPage, updateBackToStreamBtn, setTheaterMode,
@@ -97,28 +98,14 @@ function prefetchLiveDvrM3u8() {
       console.log(`[live-dvr] prefetch failed (will resolve on demand instead): ${err}`);
     });
 }
-// Set synchronously at the very top of watchChannel(), before anything
-// async happens - distinct from playbackControls.currentChannel, which
-// isn't set until playbackControls.start() runs (i.e. only after
-// start_stream has already succeeded). Needed because
-// updateChannelInfoBar() is now called as soon as a Helix lookup resolves,
-// which can happen well before start_stream finishes - if the user
-// switches to a different channel while an older channel's lookup is
-// still in flight, the older one resolving later must not be allowed to
-// stomp the newer channel's already-rendered info bar.
-/**
- * Non-null while the player has failed over to the channel's Kick
- * simulcast after the Twitch stream ended - see tryKickFailover().
- * Shape: { channel } where channel is the Twitch login (= Kick slug).
- * Cleared whenever a new session starts (watchChannel / VOD start /
- * Stop) and whenever a Twitch live start actually succeeds again.
- */
-// Tracks the quality string streamlink was last launched with for the
-// currently-playing channel/VOD, so the quality-menu's onQualityChange
-// callback (see restartStreamWithQuality below) knows what to pass to a
-// fresh start_stream/start_vod call - there's no in-memory "current
-// rendition" to read off anything the way hls.js's currentLevel was,
-// since switching quality here means relaunching streamlink entirely.
+// Set synchronously at the top of watchChannel (before any await), so a
+// late-resolving Helix lookup for a previous channel can't stomp the info bar
+// after the user has switched. Distinct from playbackControls.currentChannel,
+// which isn't set until start() succeeds.
+// Non-null while failed over to a Kick simulcast (see tryKickFailover).
+// { channel }; cleared on any new session or a successful Twitch start.
+// Quality streamlink was last launched with, so a quality change knows what
+// to pass to a fresh start (switching quality relaunches streamlink).
 
 const chat = new TwitchChat({
   container: chatMessages,
@@ -126,11 +113,8 @@ const chat = new TwitchChat({
   inputEl: chatInput,
   sendBtn: chatSendBtn,
 });
-// AutoMod queue toggle button - lives in static HTML (chat-pane's header)
-// rather than chat.js-owned DOM, so it's wired here rather than from
-// inside chat.js itself. The button's own visibility/count-badge are
-// still fully owned and updated by chat.js (_renderAutomodPanel) - this
-// is just the click handler.
+// AutoMod toggle button lives in static HTML, so its click handler is wired
+// here; chat.js still owns its visibility/count badge.
 const automodToggleBtn = document.getElementById("automod-toggle-btn");
 automodToggleBtn?.addEventListener("click", () => chat.toggleAutomodPanel());
 // Low-latency mode persists across sessions. Only applies to live streams.
@@ -217,41 +201,15 @@ function scheduleTwitchReconnect(reason) {
   }, delaySecs * 1000);
 }
 
-/**
- * The real stream-death handler: decides between failing over to Kick
- * and reconnecting Twitch. Named (not inline in the PlaybackControls
- * config) so the dev trigger below can exercise the EXACT production
- * path with a synthetic reason string - a passing manual test here means
- * the actual failover logic works, not a stand-in.
- */
-/**
- * Does this relay death / start_stream failure mean the Twitch broadcast
- * is actually GONE (as opposed to a transient blip)? The single source of
- * truth for that question - it used to be asked in two places with two
- * different hand-rolled patterns, which is exactly how a real stream end
- * slipped through: handleStreamDead tested one regex, and
- * restartStreamWithQuality tested `includes("No playable streams")`, so a
- * stream that ended with the OTHER offline message matched neither and
- * never failed over to Kick.
- *
- * The relay has two distinct ways of saying "offline" (see
- * stream_relay.rs): streamlink's own stderr ("No playable streams found
- * on this URL") when the process exits, and "closed its output without
- * producing any data" when it starts but never emits a byte - which is
- * what a just-ended stream actually produces. Both mean ended.
- *
- * Deliberately NOT matched: "no bytes from relay for 20s". That's the
- * player noticing silence, which is equally consistent with a network
- * blip, so it goes to the retry ladder instead - and the retry's
- * start_stream is what returns one of the definitive messages above.
- *
- * \bended\b, not a bare `ended`: unanchored it matches inside "appended",
- * and checkForStall's init/fragment-mismatch watchdog reports exactly
- * that ("appended 3.2MB but nothing entered the buffer") - a poisoned
- * decode pipeline, not an ended broadcast.
- */
-/** Guards against overlapping probes: checkForStall runs on a timer, and
- * a slow Helix call shouldn't queue up a second one behind it. */
+// Stream-death handler: fail over to Kick or reconnect Twitch. Named so the
+// dev trigger below can exercise the exact production path.
+// Single source of truth for "did the Twitch broadcast actually end?" The
+// relay signals offline two ways (streamlink's "No playable streams", or
+// "closed its output without producing any data"); both mean ended. Byte
+// silence ("no bytes for 20s") is deliberately excluded - it's ambiguous with
+// a blip and goes to the retry ladder. \bended\b is anchored so it doesn't
+// match "appended" from the stall watchdog.
+// Guard against overlapping probes (checkForStall is on a timer).
 let _endedProbeInFlight = false;
 
 /** DEV ONLY: channel the "Test failover" button wants the ended-probe to
@@ -259,27 +217,11 @@ let _endedProbeInFlight = false;
  * one fact the test has to supply - everything else it triggers for real. */
 let _devForceOfflineFor = null;
 
-/**
- * The relay has gone quiet (5s, see attachMseStream's onSilence) but is
- * not declared dead yet. Ask Helix whether the channel is still live.
- *
- * This exists because the old path was needlessly slow on the one case it
- * most needed to be fast - a stream actually ending. Byte-silence alone is
- * ambiguous, so the player waited a conservative 20s before calling it
- * dead, then the retry ladder waited another 2s, then start_stream had to
- * fail before anything concluded the broadcast was over: ~25s of a frozen
- * frame, by which point the channel had already vanished from the sidebar's
- * live list. The sidebar knew because it asks Helix. So: ask Helix.
- *
- * Helix is authoritative and answers in a fraction of a second, which turns
- * an ambiguous silence into a definite answer:
- *   - no stream object  -> the broadcast ENDED. Fail over to Kick now.
- *   - still live        -> a blip on our end. Do nothing; playback may well
- *                          recover on its own, and if it doesn't, onDead's
- *                          20s verdict and the retry ladder still run.
- * Being wrong in the "still live" direction costs nothing, so this only
- * ever ACTS on a definite end - it never tears down a working stream.
- */
+// Relay went quiet (5s) but isn't declared dead yet. Ask Helix, which is
+// authoritative and fast: no stream object -> ended, fail over to Kick now;
+// still live -> a blip, do nothing (onDead's 20s verdict + retry ladder still
+// run). Only ever acts on a definite end, so a wrong guess never tears down a
+// working stream.
 async function handleStreamSilent(secs) {
   if (_endedProbeInFlight) return;
   if (!session.playing || !session.intendedChannel) return;
@@ -331,24 +273,11 @@ function handleStreamDead(reason) {
   const now = Date.now();
   if (now - session.lastStreamRecoveryAt > 120_000) session.streamRecoveryAttempts = 0;
 
-  // Before spending retries, check whether this death is actually the
-  // Twitch stream ENDING with a Kick simulcast still live - the xQc
-  // case. This used to be reachable only via restartStreamWithQuality's
-  // exact "No playable streams" string, or in onStreamDead only after
-  // 4 failed retries. But a stream ending doesn't always surface as
-  // that one string (streamlink phrases offline several ways; a clean
-  // relay EOF gives no string at all), so failover could be missed for
-  // minutes or entirely while retries churned.
-  //
-  // The trick is telling "ended" from "brief network blip": for a
-  // streamer who is ALSO always live on Kick (a 24/7 rebroadcast),
-  // failing over on every Twitch blip would be wrong. So the up-front
-  // Kick check only runs when the death looks like a genuine end -
-  // streamlink/relay saying offline/ended, not a mid-stream read error.
-  // A true blip falls through to the retry ladder, and if Twitch is
-  // really gone the retries exhaust and scheduleTwitchReconnect's own
-  // final tryKickFailover still catches it. Net: fast, correct
-  // handoff on a real end; no false handoff on a hiccup.
+  // Before spending retries, check whether this is the Twitch stream ending
+  // with a Kick simulcast still live (the xQc case). Only runs when the death
+  // looks like a genuine end (streamlink/relay reporting offline, not a mid-
+  // stream read error), so a real blip falls through to the retry ladder;
+  // scheduleTwitchReconnect's final failover still catches a true end later.
   const looksEnded = looksLikeStreamEnded(reason);
   if (session.streamRecoveryAttempts === 0 && looksEnded) {
     const channelAtDeath = session.intendedChannel;
@@ -555,6 +484,47 @@ checkStreamDeps();
 // once at startup; shows the update banner if a newer release exists.
 checkForUpdate();
 
+// MultiView: multi-stream grid. Opens as a full-screen overlay, seeded with
+// the currently-playing channel if there is one. Self-contained (see
+// multiview.js) - uses the native-HLS path per tile, so it doesn't disturb
+// the main single-stream relay player.
+const multiview = new MultiView();
+// MultiView is a distinct "mode": while it's open we fully STOP the main
+// single-stream player rather than just pausing it. Pausing/muting left the
+// relay pipeline alive and could still leak audio under the grid (the
+// reported double-audio); stopping is both silent and cleaner. We remember
+// what was playing and restart it when MultiView closes.
+let _multiviewResume = null;
+const multiviewHooks = {
+  onOpen: () => {
+    _multiviewResume =
+      session.playing && session.intendedChannel ? session.intendedChannel : null;
+    try { playbackControls.stop(); } catch {}
+  },
+  onClose: () => {
+    // Restart whatever was playing before, if anything.
+    if (_multiviewResume) {
+      const ch = _multiviewResume;
+      _multiviewResume = null;
+      try { watchChannel(ch); } catch {}
+    }
+  },
+};
+document.getElementById("multiview-tab")?.addEventListener("click", () => {
+  if (multiview.isOpen) { multiview.close(); return; }
+  const seed = [];
+  if (session.playing && session.intendedChannel) seed.push(session.intendedChannel);
+  multiview.open(seed, multiviewHooks);
+  if (currentLogin) {
+    multiview.setLoggedIn(currentLogin.login, currentLogin.userId, currentLogin.displayName);
+  }
+});
+// Navigating to Home or Browse closes the grid, so those tabs always work
+// even while the overlay is up (previously the overlay covered everything
+// and trapped the user, escapable only via the small close button).
+homeTab.addEventListener("click", () => { if (multiview.isOpen) multiview.close(); });
+browseTab.addEventListener("click", () => { if (multiview.isOpen) multiview.close(); });
+
 // Show the running app version in the window title, so which build is
 // live is visible at a glance (handy for verifying an update actually
 // applied). getVersion() reads the version baked in from tauri.conf.json.
@@ -597,27 +567,11 @@ function testTwitchStreamEnd() {
     setStatus("Test: already on Kick - watch a Twitch stream first");
     return;
   }
-  // This used to call handleStreamDead("No playable streams ...") directly
-  // - i.e. it fed the code the exact string the code was written to match,
-  // skipping detection and the retry ladder entirely. It could only ever
-  // pass, and it did, right up until a real stream ended and failed over
-  // to nothing: the real relay reports "closed its output without
-  // producing any data" and arrives by a different route. A test that
-  // asserts the implementation's own assumptions tests nothing.
-  //
-  // So don't simulate the CONCLUSION, simulate the CAUSE. Starve the byte
-  // stream exactly as an ended broadcast does (relay goes quiet, socket
-  // stays open) and let production code draw its own conclusions on its
-  // own timers:
-  //
-  //   simulateSilence()  ->  checkForStall notices 5s of nothing
-  //                      ->  onSilence  ->  handleStreamSilent()
-  //                      ->  ended-probe  ->  tryKickFailover()  ->  attach
-  //
-  // Every arrow above is the real code. The single fact the test supplies
-  // is Helix's verdict (_devForceOfflineFor), because Twitch will not end
-  // a stream to suit us. If the chain is broken anywhere, this now fails
-  // the same way production did - which is the whole point.
+  // Simulate the CAUSE, not the conclusion: starve the byte stream as an ended
+  // broadcast does and let production code reach its own verdict through the
+  // real path (simulateSilence -> checkForStall -> handleStreamSilent ->
+  // ended-probe -> tryKickFailover). The only supplied fact is Helix's verdict
+  // (_devForceOfflineFor), since Twitch won't end a stream on cue.
   console.warn(
     `[test] Starving the relay for ${session.intendedChannel} - the real detector should ` +
     `notice ~5s of silence, probe Helix (forced OFFLINE), and fail over to Kick.`,
@@ -786,12 +740,19 @@ backToStreamBtn.addEventListener("click", () => {
   resyncChannelInfoBarVisibility();
 });
 
+// Latest Twitch login info (set on login), so views created lazily - like
+// the MultiView chat - can be marked logged-in when they open.
+let currentLogin = null;
 const auth = new TwitchAuth({
   loginBtn,
   userMenuEl:      document.getElementById("user-menu"),
   userMenuSignout: document.getElementById("user-menu-signout"),
   statusCallback: (login, userId, displayName) => {
     chat.setLoggedIn(login, userId, displayName);
+    // Remember the login so the MultiView chat (created lazily / may not
+    // exist yet at first login) can be marked logged-in when it opens.
+    currentLogin = { login, userId, displayName };
+    if (multiview?.isOpen) multiview.setLoggedIn(login, userId, displayName);
     sidebar.onLogin();
     // homeFeed.show() at startup (above) races ahead of login completing -
     // on a fresh launch there's no token yet, so that very first fetch
@@ -1074,29 +1035,11 @@ async function attachKickStream(channel, info, statusText) {
   );
 }
 
-/**
- * Twitch -> Kick failover. Some streamers simulcast on both platforms
- * and keep only the Kick stream going after ending the Twitch one (the
- * motivating case: xqc ending Twitch late-night and continuing on Kick
- * with content Twitch doesn't permit). When the Twitch stream has
- * genuinely ended mid-watch, this checks whether the same slug is live
- * on Kick and, if so, swaps the player onto Kick's HLS feed.
- *
- * Assumes the Kick slug equals the Twitch login - true for xqc and most
- * simulcasters; a per-channel mapping can be layered on later if needed.
- *
- * Playback rides the existing hls.js live-DVR path (attachHlsDvr) with
- * the Kick playlist pre-wrapped in the local hls-proxy by the Rust side,
- * so CORS is a non-issue and PiP keeps working unchanged (it inherits
- * _currentSourceUrl in vod mode). Chat intentionally STAYS on Twitch
- * chat, which remains usable while the Twitch channel is offline - Kick
- * chat is a separate protocol and out of scope here.
- *
- * Returns true if playback is now (or already was) on Kick. Any lookup
- * error is treated as "couldn't check", not "offline" - Kick's API is
- * unofficial and Cloudflare-fronted (see kick.rs), so an error must
- * never be read as a live-status answer.
- */
+// Twitch -> Kick failover: when a Twitch stream ends mid-watch, check if the
+// same slug is live on Kick and swap the player onto Kick's HLS feed (via the
+// existing hls.js DVR path + Rust hls-proxy). Chat stays on Twitch. Assumes
+// Kick slug == Twitch login. Returns true if now on Kick; a lookup error is
+// "couldn't check", never "offline".
 async function tryKickFailover(channelAtDeath) {
   if (
     !session.playing ||
@@ -1348,27 +1291,11 @@ async function watchChannel(channel, stream) {
   videoPlaceholder.textContent = "Resolving stream...";
   videoPlaceholder.style.display = "flex";
 
-  // Manual Watch button: caller didn't already have a Helix stream object
-  // on hand, so look one up fresh. Kicked off here, immediately - before
-  // chat.connect() and well before start_stream further down - since
-  // neither has any bearing on fetching channel info from Helix, and both
-  // can take real time (chat.connect() sets up an IRC WebSocket;
-  // start_stream spawns streamlink and waits for its remuxed output to
-  // start flowing through the local relay server, which takes a moment
-  // of its own). Previously this was chained after start_stream
-  // succeeded, which meant the avatar/title/viewer count in the info bar
-  // sat empty for however long that took, even though the data was
-  // available almost immediately - this is what was reported as "takes a
-  // long time to populate the profile picture and title."
-  //
-  // Unlike before, this IS now also awaited below (not just .then()'d)
-  // before deciding whether to call start_stream at all - we need to know
-  // up front whether Helix actually reports this channel as live, so an
-  // offline channel can skip straight to the chat-only branch instead of
-  // requesting a playback token (which would just fail) and only finding
-  // out it's offline from that failure, by which point the catch block used
-  // to tear chat back down too (see the offline-channel branch below for
-  // the full reasoning on why that was wrong).
+  // Manual Watch: no stream object on hand, so look one up fresh, immediately
+  // (before chat.connect and start_stream, which don't gate it and both take
+  // time) so the info bar populates fast. Awaited below because we need Helix's
+  // live verdict up front: an offline channel skips straight to chat-only
+  // instead of failing a playback-token request.
   let streamPromise;
   if (stream !== undefined) {
     streamPromise = Promise.resolve(stream);
@@ -1428,14 +1355,9 @@ async function watchChannel(channel, stream) {
     if (session.intendedChannel !== channel) return;
 
     if (kickInfo) {
-      // Arrange the live-session state start_stream's success path
-      // would have arranged (the parts that apply - relay/DVR state
-      // stays untouched since there's no Twitch stream), then hand the
-      // rest to the shared Kick attach used by the mid-session
-      // failover. Chat: chat.connect(channel) above already succeeded;
-      // attachKickStream disconnects it in favor of Kick chat - a brief
-      // connect/disconnect churn, accepted so the Twitch-live fast path
-      // doesn't have to wait on a Kick lookup before joining chat.
+      // Set up the live-session state, then hand off to the shared Kick attach.
+      // The Twitch chat connected above gets swapped for Kick chat - a brief
+      // churn accepted so the fast path doesn't wait on a Kick lookup.
       session.playing = true;
       syncWatchBtn();
       setTheaterMode(true);
@@ -1636,25 +1558,10 @@ async function watchChannel(channel, stream) {
   }
 }
 
-/**
- * Fired by Rust (see eventsub.rs's channel.raid dispatch) the moment the
- * currently-watched channel raids out to another one. Twitch's own
- * clients auto-follow a raid the streamer starts - "a raid sends everyone
- * connected to chat at the time of the raid to the recipient channel" per
- * Twitch's own help docs - so this mirrors that instead of leaving the
- * video frozen on the outgoing streamer's last frame, which is what used
- * to happen here (nothing previously listened for this at all; the old
- * behavior was just whatever streamlink's connection closing left on
- * screen, with no detection of *why* it closed).
- *
- * Guarded on `session.playing` and a case-insensitive match against
- * playbackControls.currentChannel rather than acting unconditionally -
- * the EventSub subscription itself is already scoped to the broadcaster
- * being watched (and torn down on every channel switch via
- * start_eventsub's stop_tx logic - see main.rs), so this is mostly
- * defense-in-depth against a slow/stale event landing just after the
- * user has already manually switched away on their own.
- */
+// Fired by Rust (eventsub.rs channel.raid) when the watched channel raids out.
+// Auto-follows the raid like Twitch's own clients, rather than leaving the video
+// frozen on the last frame. Guarded on session.playing + a channel match as
+// defense against a stale event landing after the user switched away.
 listen("eventsub-raid", (event) => {
   const { to_login, to_name, viewers } = event.payload;
   if (!session.playing || !to_login) return;

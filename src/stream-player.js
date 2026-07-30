@@ -17,30 +17,11 @@
 // SourceBuffer.appendBuffer() is for, so this module talks to it
 // directly instead.
 
-/**
- * Minimal, dependency-free scan for an 'avcC' or 'hvcC' box inside the
- * fMP4 init segment's bytes, used to build the EXACT codec string this
- * particular stream needs (see buildCodecStringFromInitSegment below).
- *
- * Why read it rather than guess from a list of common profiles:
- * isTypeSupported() demands an exact match, so an unlisted stream gets
- * rejected outright - and addSourceBuffer() will happily ACCEPT a
- * "close enough" wrong string (it only checks the string is
- * constructible, not that the bytes conform), which then blows up as
- * MEDIA_ERR_DECODE once real frames arrive.
- *
- * MP4 boxes are [4-byte big-endian size][4-byte ASCII type][payload...],
- * recursively nested for container boxes (moov, trak, mdia, minf, stbl,
- * stsd, and the visual sample entry itself e.g. avc1/hvc1). This walks
- * the whole tree for the requested box type rather than hardcoding the
- * exact nesting path, to stay robust against structural differences
- * between encoders.
- *
- * @param {Uint8Array} bytes
- * @param {string} boxType - exactly 4 ASCII characters, e.g. "avcC"
- * @returns {Uint8Array|null} the box's payload (excluding its own
- *   8-byte size+type header), or null if not found.
- */
+// Walk the fMP4 box tree for a box type (e.g. "avcC"/"hvcC"), returning its
+// payload or null. Used to build the exact codec string: isTypeSupported()
+// needs an exact match, and addSourceBuffer() accepts a wrong-but-constructible
+// string that then fails as MEDIA_ERR_DECODE. Boxes are [size][type][payload],
+// nested; this walks the tree rather than hardcoding the path.
 function findBoxPayload(bytes, boxType) {
   const typeBytes = [...boxType].map((c) => c.charCodeAt(0));
 
@@ -130,33 +111,11 @@ function findBoxPayload(bytes, boxType) {
   return scan(0, bytes.length);
 }
 
-/**
- * Builds the exact codec string this stream's init segment actually
- * declares, by reading the relevant bytes straight out of the avcC,
- * hvcC, or av1C configuration box inside moov. See findBoxPayload above
- * and its doc comment for why this replaces guessing.
- *
- * H.264 (avcC / AVCDecoderConfigurationRecord): bytes 1-3 of the payload
- * are profile_idc, constraint_flags, level_idc - exactly the three hex
- * bytes the avc1.PPCCLL codec string needs.
- *
- * H.265 (hvcC): structure is complex (ISO/IEC 14496-15), and Twitch HEVC
- * is rare - so this falls back to one broadly-compatible Main-profile
- * string rather than parsing it properly.
- *
- * AV1 (av1C / AV1CodecConfigurationRecord, §2.3.4 of AV1-ISOBMFF spec):
- *   byte[0] = 0x81  (marker=1, version=1)
- *   byte[1] = seq_profile(3 bits) | seq_level_idx_0(5 bits)
- *   byte[2] = seq_tier_0(1) | high_bitdepth(1) | twelve_bit(1) | …
- * Produces "av01.P.LLT.DD" where LL = seq_level_idx_0 zero-padded to 2
- * digits, T = M or H (tier), DD = bit depth (08/10/12).
- *
- * @param {Uint8Array} bytes - the init segment (or any prefix of the
- *   stream containing the full moov box).
- * @returns {string|null} a full `video/mp4; codecs="..."` string ready
- *   for isTypeSupported()/addSourceBuffer(), or null if no recognised
- *   config box was found in the bytes provided.
- */
+// Build the exact `video/mp4; codecs="..."` string from the avcC/hvcC/av1C
+// config box in moov, rather than guessing. H.264: profile/constraint/level
+// from avcC bytes 1-3. H.265: falls back to a Main-profile string (rare, hvcC
+// is complex). AV1: parses profile/level/tier/depth per the AV1-ISOBMFF spec.
+// Returns null if no recognised config box is present.
 function buildCodecStringFromInitSegment(bytes) {
   const avcC = findBoxPayload(bytes, "avcC");
   if (avcC && avcC.length >= 4) {
@@ -195,30 +154,11 @@ function buildCodecStringFromInitSegment(bytes) {
   return null;
 }
 
-/**
- * Attaches `relayUrl` (the local http://127.0.0.1:.../stream endpoint
- * returned by the start_stream Tauri command) to `videoEl` via
- * a fresh MediaSource, and starts pumping bytes into it.
- *
- * Returns a controller object with a stop() method to tear everything
- * down cleanly (aborts the fetch, removes the source buffer, revokes the
- * MediaSource's object URL) - callers must call stop() on the previous
- * attachment before attaching a new one (channel switch) or on
- * navigating away, or the old fetch keeps running in the background
- * indefinitely with nowhere for its bytes to go.
- *
- * @param {HTMLVideoElement} videoEl
- * @param {string} relayUrl
- * @param {object} [callbacks]
- * @param {boolean} [callbacks.isVod] - if true, skips the live-edge
- *   jump entirely: a VOD's position 0 genuinely is where playback
- *   should start, unlike a live channel where position 0 of whatever's
- *   buffered is just an arbitrary internal timestamp streamlink/ffmpeg
- *   happened to stamp the first frame with, nowhere near "now."
- * @param {() => void} [callbacks.onFatalError] - called if the stream
- *   can't be played at all (unsupported codec, fetch failed immediately,
- *   etc.) and there's no reasonable way to recover automatically.
- */
+// Attach the local relay URL to videoEl via a fresh MediaSource and pump bytes.
+// Returns a controller with stop() (aborts the fetch, tears down the source
+// buffer, revokes the object URL); call it before re-attaching or the old fetch
+// runs forever. callbacks.isVod skips the live-edge jump (a VOD starts at 0);
+// callbacks.onFatalError fires when the stream can't be played at all.
 export function attachMseStream(videoEl, relayUrl, callbacks = {}) {
   const {
     isVod = false,
@@ -327,33 +267,10 @@ export function attachMseStream(videoEl, relayUrl, callbacks = {}) {
   let _lastStallCheckTime = performance.now();
   let _lastStallCheckPosition = -1;
 
-  /**
-   * The critical step this feeder was missing for live channels: MSE has
-   * no concept of "start playing from the live edge" on its own. Without
-   * explicitly setting currentTime forward, the <video> element just sits
-   * at whatever timestamp its FIRST buffered byte happened to carry (the
-   * stream's own internal timeline, stamped by streamlink/ffmpeg - not
-   * necessarily anywhere close to "now," and not something the player
-   * advances toward on its own). hls.js handles this internally when
-   * pointed at a live HLS manifest; reimplementing the same expectation
-   * here is what makes a freshly-attached live stream actually start
-   * playing near "now" instead of looking stalled at frame one forever
-   * (which is exactly what was happening before this existed - nothing
-   * advanced playback position until something else, like manually
-   * clicking the Live button, forced a seek - and even that only worked
-   * once, since nothing kept position advancing after that one manual
-   * nudge either).
-   *
-   * For a VOD, position 0 genuinely IS the right place to start (see
-   * isVod's doc comment above) - no seek needed there, just the initial
-   * play() call once there's something to play.
-   *
-   * Requires at least MIN_BUFFER_BEFORE_START_SECONDS already buffered
-   * before acting, not just any nonzero amount - jumping/starting the
-   * instant the very first byte arrives risks landing past (or right at)
-   * the buffered range's actual end with nothing left to play yet, which
-   * stalls playback immediately after starting instead of fixing anything.
-   */
+  // Seek a fresh live stream to the live edge: MSE won't do this on its own,
+  // so without it the <video> sits frozen at the first buffered timestamp.
+  // VODs start at 0 (no seek). Waits for MIN_BUFFER_BEFORE_START_SECONDS so we
+  // don't seek past the buffered range and immediately stall.
   function startPlaybackOnceBuffered() {
     if (hasStartedPlayback) return;
     if (stopped || !sourceBuffer || sourceBuffer.updating) {
@@ -479,29 +396,10 @@ export function attachMseStream(videoEl, relayUrl, callbacks = {}) {
     }
   }
 
-  /**
-   * Detects and recovers from a specific failure mode confirmed via a
-   * real diagnostic log: the <video> element's own playback can freeze
-   * (currentTime stops advancing) while the relay keeps flowing and
-   * appendBuffer keeps succeeding continuously - the log showed
-   * uninterrupted "read chunk"/"appendBuffer called" activity the whole
-   * time, with nothing indicating why playback itself wouldn't resume.
-   * Nothing previously watched for this at all (no 'waiting'/'stalled'
-   * listener existed), so once it happened, currentTime just stayed
-   * frozen forever while wall-clock time kept passing - matching
-   * "randomly pauses and never starts up again by itself." Manually
-   * clicking Live didn't help either, because jumpToLive() was seeking
-   * based on videoEl.seekable (see its own fix, same underlying issue as
-   * this function works around: seekable reports the whole MediaSource
-   * range, not what's actually buffered/reachable).
-   *
-   * isVod is excluded even though this function *could* run for it
-   * (attachMseStream's isVod parameter exists for that reason) - VODs go
-   * through HLS.js (vod-player.js) instead in this codebase's current
-   * usage, which already has its own ERROR-driven recovery
-   * (hls.startLoad()/recoverMediaError()), so there's never actually a
-   * live MSE session to watch here for that case.
-   */
+  // Recover a frozen <video>: currentTime can stop advancing while the relay
+  // keeps flowing and appendBuffer keeps succeeding, with no error - so watch
+  // for it explicitly and nudge playback back. Live MSE only; VODs use hls.js,
+  // which has its own recovery.
   function checkForStall() {
     if (stopped || !hasStartedPlayback || isVod) {
       // Pre-playback watchdog: appends that succeed while buffered

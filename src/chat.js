@@ -26,6 +26,7 @@ import { chatUserCardMixin } from "./chat/chat-usercard.js";
 import { chatModActionsMixin } from "./chat/chat-mod-actions.js";
 import { chatLinkPreviewMixin } from "./chat/chat-link-preview.js";
 import { chatAutocompleteMixin } from "./chat/chat-autocomplete.js";
+import { chatEventsMixin } from "./chat/chat-events.js";
 import { looksLikeUrl, USER_CARD_HISTORY_LIMIT } from "./chat/shared.js";
 
 // Must match .chat-input's max-height in index.html - duplicated here
@@ -41,11 +42,20 @@ export class TwitchChat {
    * @param {HTMLElement} opts.inputEl - text input for composing messages
    * @param {HTMLElement} opts.sendBtn - button to send the composed message
    */
-  constructor({ container, statusEl, inputEl, sendBtn }) {
+  constructor({ container, statusEl, inputEl, sendBtn, emoteBtn, emotePickerMenu, inputBadge, jumpToLatestBtn, jumpToLatestCount } = {}) {
     this.container = container;
     this.statusEl = statusEl;
     this.inputEl = inputEl;
     this.sendBtn = sendBtn;
+    // Composer feature elements. Passed in so a second chat instance (e.g.
+    // MultiView) can own its own set instead of fighting over the main
+    // chat's global IDs. Fall back to the main chat's elements by ID when
+    // not supplied, preserving the original single-chat behavior.
+    this._emoteBtnEl = emoteBtn ?? document.getElementById("chat-emote-btn");
+    this._emotePickerMenuEl = emotePickerMenu ?? document.getElementById("emote-picker-menu");
+    this._inputBadgeEl = inputBadge ?? document.getElementById("chat-input-badge");
+    this._jumpToLatestBtnEl = jumpToLatestBtn ?? null;
+    this._jumpToLatestCountEl = jumpToLatestCount ?? null;
     this.channel = null;
     this.isLoggedIn = false;
     this.ownLogin = null;
@@ -191,9 +201,13 @@ export class TwitchChat {
     this._historyDraft = "";
 
     // "Jump to latest" floating button - shown when the user has scrolled
-    // up to read history, same UX pattern as Twitch's own chat.
-    this.jumpToLatestBtn = document.getElementById("jump-to-latest-btn");
-    this.jumpToLatestCount = document.getElementById("jump-to-latest-count");
+    // up to read history, same UX pattern as Twitch's own chat. Scoped to
+    // this instance's container so a second chat (MultiView) uses its own
+    // button if present, rather than the main chat's global one.
+    this.jumpToLatestBtn = this._jumpToLatestBtnEl
+      ?? document.getElementById("jump-to-latest-btn");
+    this.jumpToLatestCount = this._jumpToLatestCountEl
+      ?? document.getElementById("jump-to-latest-count");
     this.newMessageCountWhileScrolledUp = 0;
 
     if (this.sendBtn) {
@@ -500,7 +514,6 @@ export class TwitchChat {
    * the only representation of your own messages and predated the user
    * card. */
   setLoggedIn(login, userId, displayName) {
-    console.log("[points] setLoggedIn called, channel:", this.channel, "roomId:", this.roomId);
     this.isLoggedIn = true;
     this.ownLogin = login;
     this.ownDisplayName = displayName || login; // properly-cased for display
@@ -663,32 +676,12 @@ export class TwitchChat {
   }
 
   trimAndScroll() {
-    // Scroll-suppression here has been fixed twice, both times because a
-    // trimming pass shifts scrollTop and something reacted incorrectly:
-    //
-    // 1. Native scroll anchoring silently skipped compensation on some
-    //    trims (a spec-allowed heuristic miss, not a bug in the browser),
-    //    which drifted scrollTop toward the bottom over thousands of
-    //    trims until it crossed the "atBottom" threshold on its own -
-    //    auto-scroll would silently resume with the user never touching
-    //    anything. Fixed by overflow-anchor:none on .chat-body
-    //    (index.html) plus the exact scrollHeight-delta compensation
-    //    below, so nothing is left to drift.
-    //
-    // 2. The fix above tracked suppression with a counter
-    //    (this.suppressScrollEventCount), incremented per programmatic
-    //    scrollTop write and decremented per scroll event received - but
-    //    a write doesn't synchronously queue an event, and the browser
-    //    can coalesce several rapid writes (common in an active chat)
-    //    into fewer dispatched events than writes. That desyncs the
-    //    counter permanently above zero, so every future scroll event -
-    //    including genuine user scrolls - gets swallowed. This, not a
-    //    recurrence of #1, was the real cause of "pause stops working
-    //    after 15+ minutes of a busy chat." Fixed by replacing the
-    //    counter with this._suppressNextScrollEvent (a boolean): however
-    //    many writes happen and however many events actually fire, the
-    //    next event to arrive is treated as ours and the flag clears -
-    //    nothing to count, nothing to overshoot.
+    // Trimming shifts scrollTop, which must not be mistaken for a user scroll
+    // (that would wrongly resume auto-scroll). Two guards: overflow-anchor:none
+    // on .chat-body plus exact scrollHeight-delta compensation below prevent
+    // drift, and a boolean (_suppressNextScrollEvent, not a counter) marks the
+    // next scroll event as ours - a counter desynced when the browser coalesced
+    // rapid writes into fewer events.
     const heightBefore = this.container.scrollHeight;
     while (this.container.children.length > this.maxLines) {
       this.container.removeChild(this.container.firstChild);
@@ -1185,6 +1178,10 @@ export class TwitchChat {
       })
     );
 
+    // Rich event listeners: USERNOTICE (subs/resubs/gifts/raids/announce)
+    // and EventSub hype train / predictions. Same teardown via unlisteners.
+    await this._initEventListeners(listen);
+
     this.unlisteners.push(
       await listen("chat-room", (event) => {
         // Persist so setLoggedIn() can reload badges/cheermotes after login.
@@ -1409,12 +1406,20 @@ export class TwitchChat {
     line.appendChild(document.createTextNode(" "));
     line.appendChild(textSpan);
 
-    // Bits badge shown after the message text.
+    // Bits badge shown after the message text, tier-colored and animated
+    // (mirrors Twitch's cheermote tiers). Also tints the whole line so
+    // cheers stand out in the scroll.
     if (bits && bits > 0) {
+      line.classList.add("has-bits");
+      const tier =
+        bits >= 10000 ? "red" :
+        bits >= 5000  ? "blue" :
+        bits >= 1000  ? "green" :
+        bits >= 100   ? "purple" : "gray";
       const badge = document.createElement("span");
-      badge.className = "bits-total-badge";
+      badge.className = `bits-total-badge cheer-${tier}`;
       badge.title = `${bits.toLocaleString()} bits cheered`;
-      badge.textContent = `${bits.toLocaleString()} bits`;
+      badge.textContent = `⬧ ${bits.toLocaleString()}`;
       line.appendChild(badge);
     }
 
@@ -1648,16 +1653,6 @@ export class TwitchChat {
         // 7TV / BTTV emote — matched by name; Twitch native — name fallback
         const emote        = this.sevenTvEmotes.get(word);
         const twitchByName = !emote ? (this.twitchNativeEmotes?.get(word) ?? null) : null;
-        // One-time-per-emote diagnostic: log what the app knows about an
-        // emote's zero-width status, so a "not overlaying" report can be
-        // traced to detection (emote.zeroWidth false/undefined) vs rendering.
-        if (emote) {
-          this._loggedZeroWidthChecks ??= new Set();
-          if (!this._loggedZeroWidthChecks.has(word)) {
-            this._loggedZeroWidthChecks.add(word);
-            console.log(`[emotes] "${word}" provider-emote zeroWidth=${emote.zeroWidth} provider=${emote.provider}`);
-          }
-        }
         const emoteUrl     = emote?.url
           ?? (twitchByName ? `https://static-cdn.jtvnw.net/emoticons/v2/${twitchByName.id}/default/dark/2.0` : null);
         if (emoteUrl) {
@@ -1741,13 +1736,16 @@ export class TwitchChat {
     this._replyToUser = username;
 
     // Build or re-use the indicator block inserted above the input row.
-    let bar = document.getElementById("chat-reply-indicator");
-    if (!bar) {
+    // Instance-scoped (not a global ID) so a second chat (MultiView) gets
+    // its own bar above its own composer. Anchor to whichever input-row
+    // class this instance uses.
+    let bar = this._replyIndicatorEl;
+    if (!bar || !bar.isConnected) {
       bar = document.createElement("div");
-      bar.id = "chat-reply-indicator";
       bar.className = "chat-reply-indicator";
-      const inputRow = this.inputEl?.closest(".chat-input-row");
+      const inputRow = this.inputEl?.closest(".chat-input-row, .multiview-chat-input-row");
       if (inputRow) inputRow.parentElement?.insertBefore(bar, inputRow);
+      this._replyIndicatorEl = bar;
     }
     bar.innerHTML = "";
     bar.style.display = "block";
@@ -1805,7 +1803,7 @@ export class TwitchChat {
   clearReply() {
     this._replyToId = null;
     this._replyToUser = null;
-    const bar = document.getElementById("chat-reply-indicator");
+    const bar = this._replyIndicatorEl;
     if (bar) bar.style.display = "none";
     // Clear any prefilled @mention if the user hasn't typed anything extra.
     if (this.inputEl && this._replyToUser) {
@@ -1864,4 +1862,4 @@ export class TwitchChat {
 // manageable size - see the comment atop each file in src/chat/ for what it
 // covers. All of these run with the exact same `this` as everything above;
 // there is no behavioral difference from having one giant class body.
-Object.assign(TwitchChat.prototype, chatEmotesMixin, chatEmotePickerMixin, chatVodReplayMixin, chatBadgesMixin, chatAutomodMixin, chatUserCardMixin, chatModActionsMixin, chatLinkPreviewMixin, chatAutocompleteMixin);
+Object.assign(TwitchChat.prototype, chatEmotesMixin, chatEmotePickerMixin, chatVodReplayMixin, chatBadgesMixin, chatAutomodMixin, chatUserCardMixin, chatModActionsMixin, chatLinkPreviewMixin, chatAutocompleteMixin, chatEventsMixin);

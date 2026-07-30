@@ -1,27 +1,11 @@
-// Twitch EventSub WebSocket client.
+// Twitch EventSub WebSocket client - real-time events (redemptions, follows,
+// subs) without polling. In Rust because WebView2 Tracking Prevention kills
+// webview WebSockets. Flow: connect, get session_id from session_welcome, POST
+// subscriptions referencing it, receive notifications; reconnect on
+// session_reconnect before closing the old socket.
 //
-// EventSub is how Twitch pushes real-time events (channel point redemptions,
-// follows, subs, etc.) to clients without polling. It uses a dedicated
-// WebSocket endpoint rather than IRC, so it lives here in Rust for the same
-// reason the IRC client does: WebView2's Tracking Prevention kills WebSocket
-// connections to Twitch endpoints.
-//
-// Flow:
-//   1. Connect to wss://eventsub.wss.twitch.tv/ws.
-//   2. Server immediately sends session_welcome with a session_id.
-//   3. We POST to /helix/eventsub/subscriptions to register the events we
-//      want, referencing that session_id as the transport target.
-//   4. Server streams notification messages as events fire.
-//   5. Server sends session_keepalive every ~10 s to confirm it's alive.
-//   6. If server wants us to reconnect (rolling deploys etc.) it sends
-//      session_reconnect with a new URL - we connect there before closing
-//      the old socket to avoid missing events.
-//
-// AUTHORIZATION NOTE: channel.channel_points_custom_reward_redemption.add
-// requires the token owner to be the BROADCASTER or a MOD of the watched
-// channel (scope: channel:read:redemptions). The subscription POST will
-// return 403 for regular viewers - we handle that silently so it doesn't
-// clutter the chat window for non-mod sessions.
+// Note: redemption subscriptions need broadcaster/mod scope
+// (channel:read:redemptions) and 403 for regular viewers - handled silently.
 
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -129,6 +113,33 @@ pub async fn run(
                                         &session_id, &broadcaster_id, &access_token,
                                     ).await {
                                         eprintln!("[eventsub] raid subscription failed: {e}");
+                                    }
+
+                                    // Hype Train and Predictions. These need
+                                    // channel:read:hype_train / channel:read:
+                                    // predictions, which ONLY the broadcaster
+                                    // can grant - so for most viewers these
+                                    // 403 and are skipped (same expected-skip
+                                    // pattern as redemptions/automod above).
+                                    // They light up when you watch your own
+                                    // channel. Failures are logged quietly.
+                                    for (kind, ver) in [
+                                        ("channel.hype_train.begin", "1"),
+                                        ("channel.hype_train.progress", "1"),
+                                        ("channel.hype_train.end", "1"),
+                                        ("channel.prediction.begin", "1"),
+                                        ("channel.prediction.progress", "1"),
+                                        ("channel.prediction.lock", "1"),
+                                        ("channel.prediction.end", "1"),
+                                    ] {
+                                        if let Err(e) = subscribe_broadcaster_event(
+                                            &session_id, &broadcaster_id, &access_token, kind, ver,
+                                        ).await {
+                                            eprintln!(
+                                                "[eventsub] {kind} subscription skipped \
+                                                 (needs broadcaster scope): {e}"
+                                            );
+                                        }
                                     }
                                 }
                                 "session_keepalive" => {
@@ -299,6 +310,46 @@ async fn subscribe_channel_raid(
     Ok(())
 }
 
+/// Generic subscribe for events conditioned only on broadcaster_user_id
+/// (hype train, predictions). Kept separate from the bespoke helpers above
+/// because those have distinct conditions (moderator_user_id, from_/to_
+/// broadcaster). Most viewers lack the read scopes these need, so callers
+/// treat failure as an expected skip.
+async fn subscribe_broadcaster_event(
+    session_id: &str,
+    broadcaster_id: &str,
+    access_token: &str,
+    event_type: &str,
+    version: &str,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+
+    let body = json!({
+        "type":    event_type,
+        "version": version,
+        "condition": { "broadcaster_user_id": broadcaster_id },
+        "transport": { "method": "websocket", "session_id": session_id }
+    });
+
+    let resp = client
+        .post("https://api.twitch.tv/helix/eventsub/subscriptions")
+        .header("Client-ID",     crate::oauth::CLIENT_ID)
+        .header("Authorization", format!("Bearer {access_token}"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body   = resp.text().await.unwrap_or_default();
+        return Err(format!("{status}: {body}"));
+    }
+
+    eprintln!("[eventsub] subscribed to {event_type} for {broadcaster_id}");
+    Ok(())
+}
+
 // ── Notification dispatch ─────────────────────────────────────────────────────
 
 fn dispatch_notification(app: &AppHandle, payload: &Value) {
@@ -375,6 +426,30 @@ fn dispatch_notification(app: &AppHandle, payload: &Value) {
                 "to_login": to_login,
                 "to_name":  to_name,
                 "viewers":  viewers,
+            }));
+        }
+        // Hype Train + Predictions: the event shapes are rich and the
+        // frontend overlay (chat-events.js) wants most of the fields, so
+        // rather than re-map each one we forward the raw `event` object
+        // plus a normalized `kind` the overlay switches on. The subscription
+        // type suffix ("begin"/"progress"/"end"/"lock") is the state.
+        "channel.hype_train.begin"
+        | "channel.hype_train.progress"
+        | "channel.hype_train.end" => {
+            let phase = event_type.rsplit('.').next().unwrap_or("");
+            let _ = app.emit("eventsub-hypetrain", json!({
+                "phase": phase,
+                "event": event,
+            }));
+        }
+        "channel.prediction.begin"
+        | "channel.prediction.progress"
+        | "channel.prediction.lock"
+        | "channel.prediction.end" => {
+            let phase = event_type.rsplit('.').next().unwrap_or("");
+            let _ = app.emit("eventsub-prediction", json!({
+                "phase": phase,
+                "event": event,
             }));
         }
         _ => {}

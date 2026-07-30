@@ -1,23 +1,8 @@
-// pip.js — controller for pip.html, the native always-on-top PiP window.
-//
-// Everything it needs arrives via query params from enterNativePip()
-// (playback-controls.js), because this window is a separate webview
-// with no access to the main window's DOM or JS state:
-//   mode    "live" | "vod"
-//   src     live: the local relay URL (multi-subscriber - this window
-//           becomes a second consumer of the SAME streamlink pipeline,
-//           see stream_relay.rs's broadcast design)
-//           vod: the CDN m3u8 URL, played by this window's own hls.js
-//   pos     vod only: seconds to start from (the main player's position
-//           at the moment PiP was opened)
-//   volume / muted   carried over so the handoff is seamless
-//   channel window title / tooltip context
-//
-// The main window mutes itself while this window exists and restores
-// itself on our destruction - no ongoing coordination is needed, which
-// is the point: once created, this window is fully self-sufficient, and
-// closing it (its own X button or programmatically) is the entire
-// teardown protocol.
+// Controller for pip.html, the always-on-top PiP window. It's a separate
+// webview, so everything arrives via query params from enterNativePip()
+// (playback-controls.js): mode (live/vod), src (relay URL or m3u8), pos,
+// volume, muted, channel. Self-sufficient once created - the main window mutes
+// itself while it exists and restores on close; there's no ongoing coordination.
 
 import { getCurrentWindow, currentMonitor, availableMonitors, primaryMonitor, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { attachMseStream } from "./stream-player.js";

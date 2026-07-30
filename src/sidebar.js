@@ -1,20 +1,8 @@
-// Channels sidebar - "Followed Channels" (live + offline, like the
-// official site's "For You" rail) and a "Live Channels" list.
-//
-// Data flow:
-//   1. get_followed_channels  -> who the logged-in user follows (Rust,
-//      proxies /helix/channels/followed - requires user:read:follows).
-//   2. get_streams_for_users  -> which of those are live right now, plus
-//      viewer_count/game_name (Rust, proxies /helix/streams).
-//   3. get_users_info         -> profile_image_url for avatars (Rust,
-//      proxies /helix/users).
-//   4. get_top_live_streams   -> a public, non-personalized "what's live
-//      right now" list for the Live Channels rail, since Twitch doesn't
-//      expose its real personalized recommendation feed via public Helix.
-//
-// All four require api.twitch.tv, which (like IRC/badges elsewhere in this
-// app) isn't reachable directly from WebView2 - hence routing through Rust
-// commands rather than calling Helix with fetch() here.
+// Channels sidebar: followed channels (live + offline) and a Live Channels list.
+// Data via Rust-proxied Helix: get_followed_channels, get_streams_for_users
+// (live status + viewers), get_users_info (avatars), get_top_live_streams (the
+// public list, since Helix exposes no personalized feed). Routed through Rust
+// because api.twitch.tv isn't reachable directly from WebView2.
 
 import { invoke } from "@tauri-apps/api/core";
 import { feedInvoke, isKick } from "./platform.js";

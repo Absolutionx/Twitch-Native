@@ -1,19 +1,8 @@
-// Twitch IRC chat client - runs natively in Rust (Tokio + tokio-tungstenite)
-// instead of the webview's JS, specifically to avoid WebView2's Tracking
-// Prevention feature, which was silently blocking/killing the WebSocket
-// connection to irc-ws.chat.twitch.tv when it ran in JS (confirmed via
-// devtools: "Tracking Prevention blocked access to storage for
-// https://irc-ws.chat.twitch.tv/"). Rust's networking has no exposure to
-// that browser-level feature at all.
-//
-// Supports two modes:
-//   - Anonymous (no AuthCredentials): read-only, random justinfanXXXXX nick.
-//   - Authenticated (Some(AuthCredentials)): real NICK + PASS oauth:<token>,
-//     enabling sending messages via send_chat_message (scope: chat:edit).
-//
-// Parsed messages are emitted to the frontend via Tauri's event system;
-// 7TV emote fetching still happens in JS (plain fetch() to 7tv.io, which is
-// unaffected by the tracking-prevention issue above).
+// Twitch IRC chat client, in Rust (Tokio + tokio-tungstenite) because WebView2
+// Tracking Prevention silently kills the WebSocket to irc-ws.chat.twitch.tv from
+// JS. Two modes: anonymous (read-only, justinfan nick) or authenticated (NICK +
+// PASS oauth:<token>, enabling send via chat:edit). Parsed messages are emitted
+// as Tauri events; 7TV emote fetching stays in JS.
 
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
@@ -120,6 +109,29 @@ pub struct ChatClearMsgEvent {
 #[derive(Serialize, Clone)]
 pub struct ChatStatusEvent {
     pub status: String,
+}
+
+/// Fired on USERNOTICE - Twitch's channel events (subs, resubs, gift subs,
+/// raids, announcements). msg_id identifies the kind ("sub", "resub",
+/// "subgift", "submysterygift", "raid", "announcement", "viewermilestone",
+/// etc). system_msg is Twitch's own formatted description as a fallback.
+/// The remaining fields are the structured params, each present only for
+/// the event kinds that carry them (documented at their parse sites in the
+/// USERNOTICE arm). The frontend (chat-events.js) turns this into a banner.
+#[derive(Serialize, Clone)]
+pub struct ChatUsernoticeEvent {
+    pub msg_id: String,
+    pub system_msg: String,
+    pub display_name: String,
+    pub user_message: Option<String>,
+    pub emotes_tag: Option<String>,
+    pub sub_plan: Option<String>,
+    pub cumulative_months: Option<u32>,
+    pub streak_months: Option<u32>,
+    pub recipient: Option<String>,
+    pub gift_count: Option<u32>,
+    pub raider_count: Option<u32>,
+    pub announcement_color: Option<String>,
 }
 
 /// Parses Twitch IRC tag string ("key1=val1;key2=val2") into a map.
@@ -528,6 +540,61 @@ async fn handle_irc_line<S>(
                     reply_parent_user, reply_parent_body,
                     msg_id, user_id, is_action, emotes_tag,
                     is_first_msg,
+                },
+            );
+        }
+        "USERNOTICE" => {
+            // USERNOTICE carries Twitch's "event" messages: subs, resubs,
+            // gift subs, raids, announcements, etc. The msg-id tag identifies
+            // which. system-msg is Twitch's own pre-formatted description
+            // ("X subscribed at Tier 1..."), which we surface as a fallback,
+            // but we also pull structured fields so the frontend can render a
+            // richer banner. trailing (if present) is the user's attached
+            // message (e.g. a resub message).
+            let msg_id = tags.get("msg-id").cloned().unwrap_or_default();
+            let system_msg = tags.get("system-msg")
+                .cloned()
+                .map(|s| s.replace("\\s", " ").replace("\\:", ";").replace("\\\\", "\\"))
+                .unwrap_or_default();
+            let display_name = tags.get("display-name").cloned()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| prefix.split('!').next().unwrap_or("someone").to_string());
+            let user_message = if trailing.is_empty() { None } else { Some(trailing.to_string()) };
+            let emotes_tag = tags.get("emotes").cloned().filter(|s| !s.is_empty());
+
+            // Sub-plan (1000/2000/3000/Prime) and cumulative months, present
+            // on sub/resub. Gift subs carry recipient + gift count. Raids
+            // carry the raider's viewer count. All optional depending on kind.
+            let sub_plan = tags.get("msg-param-sub-plan").cloned().filter(|s| !s.is_empty());
+            let cumulative_months = tags.get("msg-param-cumulative-months")
+                .and_then(|v| v.parse::<u32>().ok());
+            let streak_months = tags.get("msg-param-streak-months")
+                .and_then(|v| v.parse::<u32>().ok())
+                .filter(|&m| m > 0);
+            let recipient = tags.get("msg-param-recipient-display-name")
+                .cloned().filter(|s| !s.is_empty());
+            let gift_count = tags.get("msg-param-mass-gift-count")
+                .and_then(|v| v.parse::<u32>().ok());
+            let raider_count = tags.get("msg-param-viewerCount")
+                .and_then(|v| v.parse::<u32>().ok());
+            let announcement_color = tags.get("msg-param-color")
+                .cloned().filter(|s| !s.is_empty());
+
+            let _ = app.emit(
+                "chat-usernotice",
+                ChatUsernoticeEvent {
+                    msg_id,
+                    system_msg,
+                    display_name,
+                    user_message,
+                    emotes_tag,
+                    sub_plan,
+                    cumulative_months,
+                    streak_months,
+                    recipient,
+                    gift_count,
+                    raider_count,
+                    announcement_color,
                 },
             );
         }

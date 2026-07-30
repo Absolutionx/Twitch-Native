@@ -1,13 +1,7 @@
-// channel-info-bar.js — the strip below the player (avatar, name, title,
-// game, viewer count, tags) plus the in-video stream-info overlay.
-//
-// Mirrors the official site's below-player strip instead of leaving that
-// area solid black - see the #channel-info-bar comment in index.html.
-//
-// It owns its own DOM and its own caches. The three things it can't own
-// are injected by main.js via initChannelInfoBar(): watching a channel,
-// switching page, and writing the status line all belong to the app
-// shell, and importing them from main.js would be a circular import.
+// The strip below the player (avatar, name, title, game, viewers, tags) plus
+// the in-video info overlay. Owns its own DOM and caches; watchChannel,
+// switchPage, and setStatus are injected via initChannelInfoBar() to avoid a
+// circular import from main.js.
 
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -410,28 +404,12 @@ export function hideChannelInfoBar() {
   }
 }
 
-/** Re-shows/hides the channel info bar using whatever it was last actually
- * rendered with, without re-fetching anything - for switchPage(), the
- * back-to-stream pill, and updateChannelInfoBar() itself to use after
- * populating content.
- *
- * Deliberately gated on `session.intendedChannel !== null && !session.pageVisible`, NOT
- * `session.playing && !session.pageVisible` - session.intendedChannel is set synchronously the
- * instant watchChannel() is called, while `session.playing` doesn't become true
- * until start_stream has actually resolved a playback URL (a network
- * round trip that can take a second or more, sometimes longer under a
- * slow connection). Gating on `session.playing` meant the
- * whole bar - name, title, viewer count, all of it, not just the avatar -
- * stayed hidden for that entire launch window even though every bit of
- * that data was already known from the Helix lookup, which resolves in a
- * fraction of a second. This is what was actually behind "the title takes
- * close to a minute to show up": it wasn't slow to fetch, it was being
- * held behind an unrelated wait that had nothing to do with it.
- * session.pageVisible is still the right gate for "is Home/Browse covering the
- * video" (set synchronously alongside session.intendedChannel, so both update
- * together at the start of watchChannel()). No-ops if nothing has ever
- * been rendered yet (e.g. theater mode toggled before any stream
- * started). */
+// Re-show/hide the info bar from whatever it last rendered, no re-fetch (for
+// switchPage, the back-to-stream pill, and updateChannelInfoBar). Gated on
+// session.intendedChannel (set synchronously in watchChannel), not
+// session.playing (only true once start_stream resolves) - gating on the latter
+// held the whole bar behind the stream-launch wait even though the Helix data
+// was already known. No-ops if nothing has rendered yet.
 export function resyncChannelInfoBarVisibility() {
   if (!lastChannelInfo) return;
   channelInfoBar.style.display = session.intendedChannel !== null && !session.pageVisible ? "flex" : "none";

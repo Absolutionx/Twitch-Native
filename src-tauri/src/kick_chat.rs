@@ -1,34 +1,16 @@
-// Kick chat client (read-only), the chat half of the Twitch -> Kick
-// failover (see kick.rs and tryKickFailover in main.js).
+// Kick chat client (read-only), the chat half of the Twitch -> Kick failover
+// (see kick.rs and tryKickFailover in main.js).
 //
-// Kick chat is delivered over Pusher WebSockets: subscribe to the public
-// channel `chatrooms.{chatroom_id}.v2` (no auth needed to read) and
-// messages arrive as `App\Events\ChatMessageEvent` frames. The chatroom
-// id comes from the same unofficial channel endpoint kick.rs already
-// calls, so the same caveat applies: this can break whenever Kick
-// changes things, and every failure here degrades to "no Kick chat",
-// never to a crash.
+// Kick chat rides Pusher WebSockets: subscribe to the public
+// `chatrooms.{chatroom_id}.v2` (no auth to read); messages arrive as
+// ChatMessageEvent frames. In Rust because WebView2 Tracking Prevention kills
+// webview-opened WebSockets. Sending is a separate, login-gated path
+// (kick_oauth.rs); this client itself is read-only.
 //
-// This lives in Rust for the same reason the IRC client and EventSub do:
-// WebView2's Tracking Prevention kills WebSocket connections opened from
-// the webview itself.
-//
-// This client is READ-ONLY BY ITSELF: it only subscribes to the public
-// Pusher channel and has no notion of Kick login. Sending is a separate
-// path - kick_oauth.rs's kick_send_chat_message, gated on the user being
-// logged in to Kick (OAuth) and the channel having a broadcaster id -
-// which chat.js's composer enables/disables independently of whether
-// this client is connected. Don't assume "this file runs" means "chat is
-// read-only"; check _applyKickInputState in chat.js for the real gate.
-//
-// Messages are emitted as the SAME "chat-message" event the IRC client
-// emits (crate::chat::ChatMessageEvent), so the entire existing renderer
-// - colors, mention tracking, autocomplete - works unchanged. Fields
-// that have no Kick equivalent (badges, bits, emote positions) are None;
-// Kick's inline emote tokens are rewritten to an id-carrying marker (see
-// flatten_emote_tokens) that the frontend turns into an <img> directly
-// from the id, without needing the emote's channel to be one this app
-// has fetched a set for.
+// Messages are emitted as the same "chat-message" event the IRC client uses,
+// so the renderer works unchanged. Fields with no Kick equivalent (badges,
+// bits, emote positions) are None; inline emote tokens become id-carrying
+// markers (flatten_emote_tokens) the frontend renders directly.
 
 use std::sync::Mutex;
 

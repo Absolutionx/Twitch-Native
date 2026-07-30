@@ -1,22 +1,8 @@
-// Home feed - shown inside #video-column in place of the empty player
-// placeholder whenever nothing is currently playing, mirroring the
-// official site's logged-in homepage: a recommended-streams carousel up
-// top, a "Live channels we think you'll like" grid below it, and one or
-// more category rows (here: "RPGs").
-//
-// Data sources (all real Helix data, routed through Rust like the sidebar -
-// see sidebar.js's header comment for why this can't just be fetch() from
-// the webview directly):
-//   - get_top_live_streams        -> carousel + recommended grid
-//   - get_streams_for_game_names  -> the RPGs row
-//   - get_users_info              -> profile pictures for the grid/carousel
-//     cards (streams responses don't include them, only user_login/name)
-//
-// There's no public Helix endpoint for personalized recommendations or for
-// "what genre is this game in" grouping - both are internal services on the
-// real site. This substitutes general top-viewed live streams for the
-// recommended sections, and a hand-picked list of well-known RPG titles for
-// the RPGs row.
+// Home feed (in #video-column when nothing is playing): a carousel, a
+// recommended grid, and category rows. Data via Rust-proxied Helix
+// (get_top_live_streams, get_streams_for_game_names, get_users_info for
+// avatars). Helix has no personalized-recommendation or genre endpoint, so this
+// substitutes top-viewed streams and a hand-picked RPG list.
 
 import { invoke } from "@tauri-apps/api/core";
 import { feedInvoke, isKick } from "./platform.js";

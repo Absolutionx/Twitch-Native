@@ -1,26 +1,8 @@
-// chat-mod-actions.js — part of TwitchChat (see ../chat.js). Moderation actions and their /slash-command equivalents (ban, timeout, clear, delete).
-//
-// Three actions: delete (one message), timeout (a user, for a chosen
-// duration), ban (permanent). Timeout/ban are triggered from the user
-// card only (click a username), matching Twitch's own chat. Delete is
-// available from BOTH the hover row's icon and the card's own Delete
-// button, per explicit request to keep it reachable on hover even after
-// moving everything else to the card. All three need this.roomId (the
-// broadcaster's user id, set once ROOMSTATE arrives - see chat.js's
-// connect()) and the target's user id.
-//
-// Disabled (not hidden) for non-mods and for self-targeting, since
-// Twitch's own /timeout and /ban commands refuse to let a mod time out
-// or ban themselves - the Helix endpoints behind these buttons would
-// just 400 either way, so the button reflects that instead of inviting
-// a click that's guaranteed to fail.
-//
-// This is a mixin, not a standalone class: chat.js does
-// `Object.assign(TwitchChat.prototype, chatModActionsMixin)` after the class
-// body, so every method here runs with the same `this` (container, ws,
-// caches, etc.) as methods still defined directly in chat.js. Methods are
-// grouped into files by feature area purely for readability — there is no
-// behavioral difference from having them all in one file.
+// Part of TwitchChat (see ../chat.js): moderation actions (delete, timeout,
+// ban) and their slash-command equivalents. Timeout/ban come from the user card;
+// delete is also on the hover row. All need this.roomId and the target user id.
+// Disabled (not hidden) for non-mods and self-targeting, since the Helix
+// endpoints would 400 anyway. Mixin: Object.assign'd onto TwitchChat.prototype.
 
 import { invoke } from "@tauri-apps/api/core";
 export const chatModActionsMixin = {

@@ -24,27 +24,11 @@ export const chatAutocompleteMixin = {
     return { word, wordStart: start, wordEnd: end };
   },
 
-  /**
-   * Fetches the full chatter roster (get_chatters, backed by Helix's
-   * /helix/chat/chatters) and merges it into _chatUsers, so @mention
-   * autocomplete can suggest silent viewers too - not just people who've
-   * actually typed, which is all _chatUsers ever captured before this.
-   *
-   * Only attempted when the logged-in user is a mod or the broadcaster
-   * of the channel being watched, since that's the only case Twitch
-   * actually permits this endpoint for - calling it as a plain viewer
-   * would just 403. Called from both the chat-room handler (room-id just
-   * became known) and the mod-status-change listener (mod status just
-   * became known), since either one can arrive first; the
-   * _chattersFetchedForChannel guard means whichever fires second is a
-   * no-op rather than a duplicate fetch.
-   *
-   * Errors (403 for a non-mod, or any network hiccup) are swallowed -
-   * this is purely an enhancement on top of the existing speak-to-be-
-   * tracked behavior, never something the rest of chat depends on, so a
-   * failure here should just leave that fallback in place rather than
-   * surfacing a system-line error for something the user didn't ask for.
-   */
+  // Fetch the full chatter roster (get_chatters) into _chatUsers so @mention
+  // autocomplete can suggest silent viewers, not just people who've typed. Only
+  // works as a mod/broadcaster (403s otherwise), so it's attempted from both the
+  // room-id and mod-status listeners (whichever arrives first), guarded against
+  // a duplicate fetch. Errors are swallowed - it's a pure enhancement.
   async _maybeFetchChatters() {
     if (!this.roomId || !this.channel) return;
     const isBroadcaster = this.ownLogin && this.ownLogin.toLowerCase() === this.channel;

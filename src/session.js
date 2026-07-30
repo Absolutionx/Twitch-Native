@@ -1,23 +1,7 @@
-// session.js — the state of "what is currently playing," owned in one place.
-//
-// This used to be ~14 module-level `let`s at the top of main.js. Nothing
-// else could be split out of main.js while they lived there: every
-// candidate module (stream lifecycle, watch entry points, the channel
-// info bar, the layout chrome) reads or writes some of them, so moving
-// any one of those out meant either importing back from main.js (a
-// circular import) or threading a dozen arguments through every call.
-//
-// Exporting them as properties of one object solves that: `import
-// { session }` gives every module a live view of the same state, and
-// assignment (`session.playing = true`) is visible everywhere at once.
-// It has to be an object rather than exported `let`s because ES module
-// bindings are read-only to importers - you can read `playing`, but you
-// cannot assign to it from another module.
-//
-// What belongs here: state that genuinely spans modules. State used by
-// exactly one module (the drops banner's dismissal memory, the info
-// bar's refresh timer, the fullscreen flag) stays private to that
-// module - see drops-banner.js / channel-info-bar.js / layout.js.
+// Shared "what is currently playing" state, in one object so every module gets
+// a live, writable view (`import { session }`). An object rather than exported
+// `let`s because ES module bindings are read-only to importers. Only put
+// cross-module state here; single-module state stays private to that module.
 
 export const session = {
   // --- Playback ---------------------------------------------------------

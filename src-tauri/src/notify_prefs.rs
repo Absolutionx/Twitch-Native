@@ -1,13 +1,6 @@
-// Persists the go-live notification channel opt-ins.
-//
-// Stored in notify_channels.json using the same app_local_data_dir path
-// that oauth_token.json uses — confirmed to survive full app quit on this
-// machine.
-//
-// This file previously also stored close_pref ("tray"/"quit") for the
-// old close-behavior dialog; that feature is gone (closing the window
-// just closes the app now), and serde ignores unknown fields by default,
-// so old on-disk files that still contain a close_pref key load fine.
+// Persists go-live notification opt-ins to notify_channels.json in
+// app_local_data_dir. Old files may carry a stale close_pref key; serde ignores
+// unknown fields, so they still load.
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};

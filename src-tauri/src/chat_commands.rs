@@ -1,13 +1,7 @@
-// chat_commands.rs — the Tauri command surface for chat.
-//
-// Chat lifecycle (connect/disconnect/send), moderation (ban, timeout,
-// delete, AutoMod), the chat cosmetics Helix serves (badges, emotes,
-// cheermotes), and the two realtime side-channels chat depends on
-// (EventSub for channel-point redeems, 7TV for its emote events).
-//
-// The IRC client itself lives in chat.rs; this is only the command layer
-// the frontend calls. Split out of main.rs so that file can go back to
-// being what it should be: app setup and the command registry.
+// Tauri command surface for chat: lifecycle (connect/disconnect/send),
+// moderation, cosmetics (badges/emotes/cheermotes), and the realtime side-
+// channels (EventSub redeems, 7TV emote events). The IRC client is in chat.rs;
+// this is only the command layer.
 
 use tauri::State;
 

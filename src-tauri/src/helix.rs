@@ -1,17 +1,7 @@
-// helix.rs — Twitch's Helix REST API.
-//
-// Every one of these is proxied through Rust for the same reason IRC is:
-// api.twitch.tv fails with ERR_NAME_NOT_RESOLVED from inside WebView2.
-//
-// Helix wants `Authorization: Bearer <token>` on most requests, so the
-// access token is read out of ChatState (where the OAuth flow parks it).
-// Commands that REQUIRE a login go through require_auth() and fail with
-// "Not logged in"; the rest send whatever token is available, and a 401
-// is handled on the JS side.
-//
-// Split out of main.rs, which had accumulated 34 commands across chat,
-// moderation, EventSub, 7TV and Helix. kick.rs already owned its own
-// commands this way - this gives the Twitch side the same treatment.
+// Twitch Helix REST API, proxied through Rust because api.twitch.tv fails from
+// inside WebView2. Token comes from ChatState (where OAuth parks it); commands
+// that require login go through require_auth(), the rest send whatever token is
+// available and let the JS side handle a 401.
 
 use tauri::State;
 

@@ -744,16 +744,24 @@ header #login-btn.logged-in { border-radius: 999px; }
   top: 0;
   left: 0;
   right: 0;
-  min-height: 38px;
-  z-index: 501;
+  min-height: 44px;
+  z-index: 502;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 14px;
+  padding: 6px 14px;
   background: #241a33;
   border-bottom: 1px solid var(--accent);
   color: #efeff1;
   font-size: 13px;
+  box-sizing: border-box;
+}
+/* When the deps banner is also showing, stack the update banner directly
+   below it (both are fixed to the top) instead of overlapping it. */
+#app.deps-banner-visible ~ .update-banner,
+.deps-banner-visible .update-banner,
+.update-banner.below-deps {
+  top: 38px;
 }
 .update-banner-text {
   flex: 1;
@@ -3160,7 +3168,7 @@ body.kick-mode .sidebar-channel-name {
   border-radius: 6px;
   padding: 4px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.5);
-  z-index: 9999;
+  z-index: 12000; /* above everything incl. MultiView overlay (11000) */
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -3200,7 +3208,7 @@ body.kick-mode .sidebar-channel-name {
   border-radius: 8px;
   padding: 12px;
   box-shadow: 0 6px 20px rgba(0,0,0,0.55);
-  z-index: 9999;
+  z-index: 12000; /* above everything incl. MultiView overlay (11000) */
   /* Caps the WHOLE card (header + scrollable body together) to
      70% of the viewport height. The body below is the part that
      actually scrolls; max-height/overflow here used to be on this
@@ -3486,6 +3494,14 @@ body.kick-mode .sidebar-channel-name {
   width: 18px;
   height: 18px;
 }
+/* MultiView's composer is a simple centered flex row (unlike the main
+   chat's growing textarea, which needs the 9px bottom offset to sit the
+   badges on the baseline). Here that offset pushes them up and out of
+   alignment - zero it out so they center in the input wrapper. */
+#multiview-chat-input-badge {
+  padding-bottom: 0;
+  align-self: center;
+}
 
 /* ── Fullscreen / large-window chat font bump ────────────────── */
 @media (min-height: 900px), (min-width: 1600px) {
@@ -3565,7 +3581,7 @@ body.kick-mode .sidebar-channel-name {
   box-shadow: 0 -4px 16px rgba(0,0,0,0.5);
   max-height: 260px;
   overflow-y: auto;
-  z-index: 9999; /* above everything */
+  z-index: 12000; /* above everything incl. MultiView overlay (11000) */
   scrollbar-width: thin;
   scrollbar-color: var(--accent-dark) #18181b;
 }
@@ -3603,7 +3619,7 @@ body.kick-mode .sidebar-channel-name {
   border: 1px solid #3a3a3d;
   border-radius: 6px;
   box-shadow: 0 -4px 16px rgba(0,0,0,0.5);
-  z-index: 9999; /* above everything, same as .emote-autocomplete */
+  z-index: 12000; /* above everything incl. MultiView overlay (11000) */
   height: 360px;
   overflow: hidden;
 }
@@ -3760,7 +3776,7 @@ body.kick-mode .sidebar-channel-name {
   border-radius: 6px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.5);
   overflow: hidden;
-  z-index: 9999; /* above everything, same as .emote-autocomplete */
+  z-index: 12000; /* above everything incl. MultiView overlay (11000) */
   /* Hover events come from a chat link; clicks should still go
      straight through to whatever's under the popup (i.e. nothing
      in this app reacts to clicking the preview itself), and the
@@ -4066,4 +4082,652 @@ body.kick-mode .channel-info-follow-btn.is-following {
   padding: 3px 8px;
   width: 150px;
   outline: none;
+}
+
+/* ── Rich chat events (subs / gifts / raids / bits / hype train / predictions)
+   Built by src/chat/chat-events.js. Shared event-line look first, then the
+   per-type accents, then the two persistent overlays. ───────────────────── */
+
+.chat-event {
+  margin: 3px 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border-left: 3px solid var(--accent);
+  background: linear-gradient(90deg, var(--accent-soft), transparent);
+  font-size: 13px;
+  line-height: 1.45;
+  animation: chat-event-in 0.25s ease;
+}
+@keyframes chat-event-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.chat-event-info { color: #efeff1; }
+.chat-event-name { font-weight: 700; color: var(--accent-text); }
+.chat-event-message {
+  margin-top: 3px;
+  color: #d6d6da;
+  font-size: 13px;
+}
+.sub-event-icon, .gift-event-icon, .raid-event-icon {
+  margin-right: 6px;
+}
+.sub-event      { border-left-color: var(--accent); }
+.gift-event     { border-left-color: #ff4dd2;
+                  background: linear-gradient(90deg, #ff4dd222, transparent); }
+.raid-event     { border-left-color: #00c8ff;
+                  background: linear-gradient(90deg, #00c8ff22, transparent); }
+.mass-gift-event { border-left-width: 4px; font-weight: 500; }
+
+/* Announcements: colored band per Twitch's announcement color. */
+.announcement-event { border-left-width: 4px; }
+.announcement-primary { border-left-color: var(--accent);
+                        background: linear-gradient(90deg, var(--accent-soft), transparent); }
+.announcement-blue   { border-left-color: #1e90ff;
+                        background: linear-gradient(90deg, #1e90ff22, transparent); }
+.announcement-green  { border-left-color: #2ecc71;
+                        background: linear-gradient(90deg, #2ecc7122, transparent); }
+.announcement-orange { border-left-color: #ff9f1c;
+                        background: linear-gradient(90deg, #ff9f1c22, transparent); }
+.announcement-purple { border-left-color: #a970ff;
+                        background: linear-gradient(90deg, #a970ff22, transparent); }
+.generic-event {
+  border-left-color: #555;
+  background: none;
+  color: #adadb8;
+  font-size: 12px;
+}
+
+/* Bits / cheers: tier-colored animated badge + subtle line tint. */
+.chat-line.has-bits {
+  background: linear-gradient(90deg, #9147ff11, transparent);
+  border-radius: 4px;
+}
+.bits-total-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  animation: cheer-pulse 1.2s ease-in-out infinite;
+}
+.bits-total-badge.cheer-gray   { background: #9c9c9c; color: #1a1a1a; }
+.bits-total-badge.cheer-purple { background: #9147ff; }
+.bits-total-badge.cheer-green  { background: #1db954; }
+.bits-total-badge.cheer-blue   { background: #1e90ff; }
+.bits-total-badge.cheer-red    { background: #eb0400; }
+@keyframes cheer-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.08); }
+}
+
+/* Persistent overlays (hype train, predictions) pinned above chat. */
+#chat-event-overlays {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+}
+.chat-event-overlay {
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #1f1f23;
+  border: 1px solid #33333b;
+  animation: chat-event-in 0.3s ease;
+}
+.chat-event-overlay-ending {
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+
+/* Hype Train */
+#hype-train-overlay {
+  border-color: #ff4dd2;
+  background: linear-gradient(135deg, #2a1030, #1f1f23);
+}
+.hype-train-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #efeff1;
+  margin-bottom: 6px;
+}
+.hype-train-title { font-weight: 700; }
+.hype-train-level {
+  background: #ff4dd2;
+  color: #fff;
+  border-radius: 8px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.hype-train-countdown { margin-left: auto; color: #ff9fe8; font-variant-numeric: tabular-nums; }
+.hype-train-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: #3a2440;
+  overflow: hidden;
+}
+.hype-train-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ff4dd2, #ff9f1c);
+  transition: width 0.4s ease;
+}
+.hype-train-progress {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #d6a6d0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Predictions */
+#prediction-overlay { border-color: var(--accent); }
+.prediction-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #efeff1;
+  margin-bottom: 6px;
+}
+.prediction-title { font-weight: 700; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prediction-status {
+  font-size: 11px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 6px;
+  padding: 1px 7px;
+}
+.prediction-countdown { color: var(--accent-text); font-variant-numeric: tabular-nums; }
+.prediction-outcomes { display: flex; flex-direction: column; gap: 4px; }
+.prediction-outcome {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: #26262c;
+  overflow: hidden;
+  font-size: 12px;
+  color: #efeff1;
+}
+.prediction-outcome-fill {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  opacity: 0.35;
+  transition: width 0.4s ease;
+  z-index: 0;
+}
+.outcome-blue .prediction-outcome-fill { background: #387aff; }
+.outcome-pink .prediction-outcome-fill { background: #f5009b; }
+.prediction-outcome-title { position: relative; z-index: 1; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prediction-outcome-pct   { position: relative; z-index: 1; font-weight: 700; font-variant-numeric: tabular-nums; }
+.prediction-outcome-pts   { position: relative; z-index: 1; color: #adadb8; font-size: 11px; font-variant-numeric: tabular-nums; }
+.prediction-outcome.prediction-won  { outline: 2px solid #2ecc71; }
+.prediction-outcome.prediction-lost { opacity: 0.5; }
+
+/* ── MultiNook: multi-stream grid overlay (src/multiview.js) ───────────── */
+.multiview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  background: #0e0e10;
+  display: none;
+  flex-direction: column;
+}
+.multiview-overlay.multiview-open { display: flex; }
+
+.multiview-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #18181b;
+  border-bottom: 1px solid #2a2a2e;
+  flex-shrink: 0;
+}
+.multiview-title { font-weight: 700; color: #efeff1; font-size: 14px; }
+.multiview-add { display: flex; gap: 6px; }
+.multiview-add-input {
+  background: #0e0e10;
+  border: 1px solid #33333b;
+  border-radius: 4px;
+  color: #efeff1;
+  padding: 4px 8px;
+  font-size: 13px;
+  width: 180px;
+}
+.multiview-add-input:focus { outline: none; border-color: var(--accent); }
+.multiview-add-btn {
+  background: var(--accent);
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.multiview-add-btn:hover { background: var(--accent-dark); }
+.multiview-count { color: #adadb8; font-size: 12px; }
+.multiview-theater {
+  background: #26262c;
+  border: 1px solid #33333b;
+  color: #efeff1;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  padding: 7px 14px;
+  border-radius: 4px;
+}
+.multiview-theater:hover { background: #33333b; }
+.multiview-theater.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+.multiview-close {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  padding: 7px 14px;
+  border-radius: 4px;
+}
+.multiview-close:hover { background: var(--accent-dark); }
+
+/* Body splits into the video grid (flex-grow) and a fixed chat sidebar, so
+   the grid gets ALL remaining width - videos are as large as possible while
+   the focused channel's chat stays readable on the right. */
+.multiview-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.multiview-grid-wrap {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+}
+.multiview-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  gap: 6px;
+  padding: 6px;
+  overflow: auto;
+  grid-auto-rows: 1fr;
+}
+.multiview-empty {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  color: #6b6b73;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+/* Chat sidebar: the single shared, focus-following chat. Fixed, readable
+   width; the grid flexes around it. */
+.multiview-chat {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #18181b;
+  border-left: 1px solid #2a2a2e;
+  min-height: 0;
+}
+.multiview-chat-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #2a2a2e;
+  flex-shrink: 0;
+}
+.multiview-chat-title { font-weight: 700; color: #efeff1; font-size: 13px; }
+.multiview-chat-channel { color: var(--accent-text); font-size: 12px; }
+.multiview-chat-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 8px;
+  /* Match the main chat's large-window size: MultiView is a full-screen
+     overlay, so the main chat pane is showing at its bumped 15px (see the
+     fullscreen font-bump media query), and 13px here looked smaller. */
+  font-size: 15px;
+  line-height: 1.5;
+  min-height: 0;
+  /* Same as the main .chat-body: disable native scroll anchoring so
+     trimAndScroll's manual scrollTop compensation isn't fought by the
+     browser drifting the position - that drift is what caused the chat to
+     "keep scrolling up while scrolling down" and silently resume
+     auto-scroll. */
+  overflow-anchor: none;
+}
+.multiview-chat-body-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.multiview-chat-status {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #6b6b73;
+  border-top: 1px solid #2a2a2e;
+  flex-shrink: 0;
+}
+
+.multiview-tile {
+  position: relative;
+  background: #000;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  overflow: hidden;
+  min-height: 0;
+}
+.multiview-tile.multiview-tile-focused { border-color: var(--accent); }
+/* In theater mode only the focused tile is shown, so the "which one is
+   selected" border is redundant - drop it for a clean full-bleed view. */
+.multiview-theater-on .multiview-tile.multiview-tile-focused { border-color: transparent; }
+/* While MultiView is open it's a full-screen mode; the main app's top
+   banners (update/deps) belong to the app underneath and would otherwise
+   poke through / collide with MultiView's own bar. Hide them for the
+   duration - they reappear when MultiView closes. */
+body:has(.multiview-overlay.multiview-open) .update-banner,
+body:has(.multiview-overlay.multiview-open) .deps-banner,
+body.multiview-active .update-banner,
+body.multiview-active .deps-banner {
+  display: none !important;
+}
+
+.multiview-tile-video {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  background: #000;
+}
+.multiview-tile-video video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.multiview-tile-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #adadb8;
+  font-size: 13px;
+  background: #0e0e10;
+}
+.multiview-tile-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.7), transparent);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.multiview-tile-video:hover .multiview-tile-overlay { opacity: 1; }
+.multiview-tile-name { color: #fff; font-weight: 600; font-size: 13px; }
+.multiview-tile-actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.multiview-tile-quality {
+  background: #18181b;
+  color: #efeff1;
+  border: 1px solid #33333b;
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+.multiview-tile-mute, .multiview-tile-remove,
+.multiview-tile-pip, .multiview-tile-fs {
+  background: rgba(0,0,0,0.5);
+  border: none;
+  color: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 7px;
+  line-height: 1;
+}
+.multiview-tile-mute:hover, .multiview-tile-remove:hover,
+.multiview-tile-pip:hover, .multiview-tile-fs:hover { background: rgba(0,0,0,0.8); }
+.multiview-tile-volume {
+  width: 60px;
+  height: 4px;
+  cursor: pointer;
+  accent-color: var(--accent);
+  vertical-align: middle;
+}
+.multiview-multiaudio {
+  margin-left: auto;
+  background: #26262c;
+  border: 1px solid #33333b;
+  color: #efeff1;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  padding: 7px 14px;
+  border-radius: 4px;
+}
+.multiview-multiaudio:hover { background: #33333b; }
+.multiview-multiaudio.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+
+/* MultiView followed-channels picker */
+.multiview-followed-btn {
+  background: #26262c;
+  border: 1px solid #3a3a42;
+  color: #efeff1;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 6px 13px;
+  border-radius: 6px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.multiview-followed-btn:hover { background: #33333b; border-color: var(--accent); }
+.multiview-followed-panel {
+  position: absolute;
+  top: 52px;
+  left: 12px;
+  z-index: 30;
+  width: 340px;
+  max-height: min(70vh, 620px);
+  display: flex;
+  flex-direction: column;
+  background: #1c1c20;
+  border: 1px solid #3a3a42;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  overflow: hidden;
+}
+.multiview-followed-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid #2a2a2e;
+  font-size: 13px;
+  font-weight: 700;
+  color: #efeff1;
+}
+.multiview-followed-close {
+  background: none; border: none; color: #adadb8;
+  font-size: 20px; line-height: 1; cursor: pointer; padding: 0 2px;
+}
+.multiview-followed-close:hover { color: #efeff1; }
+.multiview-followed-list { overflow-y: auto; padding: 6px; }
+.multiview-followed-loading, .multiview-followed-empty {
+  padding: 24px 16px; text-align: center; color: #adadb8; font-size: 13px;
+}
+.multiview-followed-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #efeff1;
+  text-align: left;
+  transition: background 0.1s ease;
+}
+.multiview-followed-item:hover { background: #2a2a30; }
+.multiview-followed-item.added { opacity: 0.5; cursor: default; }
+.multiview-followed-item.added:hover { background: none; }
+.multiview-followed-avatar-wrap { position: relative; flex-shrink: 0; }
+.multiview-followed-avatar {
+  width: 34px; height: 34px; border-radius: 50%;
+  object-fit: cover; display: block; background: #33333b;
+}
+.multiview-followed-avatar-fallback {
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 14px; color: #bf94ff;
+}
+.multiview-followed-item:not(.is-live) .multiview-followed-avatar {
+  filter: grayscale(0.7); opacity: 0.7;
+}
+.multiview-followed-live-dot {
+  position: absolute; bottom: -1px; right: -1px;
+  width: 11px; height: 11px; border-radius: 50%;
+  background: #eb0400; border: 2px solid #1c1c20;
+}
+.multiview-followed-text {
+  display: flex; flex-direction: column; gap: 1px;
+  min-width: 0; flex: 1;
+}
+.multiview-followed-name {
+  font-weight: 600; font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.multiview-followed-sub {
+  font-size: 11px; color: #adadb8;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.multiview-followed-sub.offline { color: #6b6b73; }
+.multiview-followed-viewers {
+  font-size: 12px; color: #ff6b6b; font-weight: 600;
+  flex-shrink: 0; font-variant-numeric: tabular-nums;
+}
+.multiview-followed-add {
+  width: 22px; height: 22px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; background: var(--accent-soft);
+  color: var(--accent-text); font-weight: 700; font-size: 14px;
+}
+.multiview-followed-item:hover .multiview-followed-add {
+  background: var(--accent); color: #fff;
+}
+.multiview-followed-item.added .multiview-followed-add {
+  background: none; color: #2ecc71;
+}
+
+/* MultiView chat input row */
+.multiview-chat-input-row {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid #2a2a2e;
+  flex-shrink: 0;
+  align-items: stretch;
+}
+.multiview-chat-input-wrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #0e0e10;
+  border: 1px solid #33333b;
+  border-radius: 4px;
+  padding: 0 6px;
+  min-width: 0;
+}
+.multiview-chat-input-wrapper:focus-within { border-color: var(--accent); }
+.multiview-chat-input {
+  flex: 1;
+  resize: none;
+  background: transparent;
+  border: none;
+  color: #efeff1;
+  padding: 7px 3px;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.3;
+  max-height: 80px;
+  min-width: 0;
+}
+.multiview-chat-input:focus { outline: none; }
+.multiview-chat-input:disabled { opacity: 0.5; }
+.multiview-chat-send {
+  background: var(--accent);
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.multiview-chat-send:hover { background: var(--accent-dark); }
+.multiview-chat-send:disabled { opacity: 0.5; cursor: default; }
+
+
+/* MultiView scrollbars - themed purple to match the rest of the Twitch-side
+   app (the default WebView2 scrollbar renders white otherwise). Applied to
+   every scrollable region in the overlay: the followed picker, the chat
+   body, and the grid. Firefox uses scrollbar-color; Chromium/WebView2 uses
+   the ::-webkit-scrollbar pseudo-elements. */
+.multiview-followed-list,
+.multiview-chat-body,
+.multiview-grid {
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dark) #18181b;
+}
+.multiview-followed-list::-webkit-scrollbar,
+.multiview-chat-body::-webkit-scrollbar,
+.multiview-grid::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.multiview-followed-list::-webkit-scrollbar-track,
+.multiview-chat-body::-webkit-scrollbar-track,
+.multiview-grid::-webkit-scrollbar-track {
+  background: #18181b;
+}
+.multiview-followed-list::-webkit-scrollbar-thumb,
+.multiview-chat-body::-webkit-scrollbar-thumb,
+.multiview-grid::-webkit-scrollbar-thumb {
+  background: var(--accent-dark);
+  border-radius: 4px;
+}
+.multiview-followed-list::-webkit-scrollbar-thumb:hover,
+.multiview-chat-body::-webkit-scrollbar-thumb:hover,
+.multiview-grid::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
 }

@@ -237,7 +237,7 @@ export const chatBadgesMixin = {
   /** Renders the user's own badges into #chat-input-badge, shown to the
    * left of the chat input field. Called whenever USERSTATE arrives. */
   _renderInputBadges(badgesTag) {
-    const container = document.getElementById("chat-input-badge");
+    const container = this._inputBadgeEl;
     if (!container) return;
     container.innerHTML = "";
     if (!badgesTag) return;

@@ -1,24 +1,9 @@
-// seek-thumbnails.js — VOD seek-bar hover previews, built from Twitch's
-// own storyboard sprite sheets (the same ones twitch.tv's VOD player
-// scrubs with). chapters.js's fetchVodSeekPreviewsUrl() gets the URL via
-// GQL (video.seekPreviewsURL); it points at a small JSON describing the
-// sprite layout, which this fetches.
-//
-// Schema (confirmed against a real ~7h VOD): a top-level array with one
-// entry per QUALITY TIER - not per time range; every entry covers the
-// whole VOD at a different resolution. Each entry:
-//   { quality, count, interval, width, height, rows, cols, images[] }
-//
-// Two things that are easy to get wrong:
-//   - `count` is the total frames for the tier, while `rows`/`cols` is
-//     the grid within ONE image. When count > rows*cols the frames spill
-//     across `images` in order (images[0] = frames 0..rows*cols-1, etc).
-//   - `images` entries are bare filenames, resolved against the metadata
-//     JSON's own CDN directory - not full URLs.
-//
-// Older/differently-processed VODs may vary, so a few alternate key
-// spellings are still tolerated defensively.
-// confirmed real data instead of a blind guess.
+// VOD seek-bar hover previews from Twitch's storyboard sprite sheets (URL via
+// chapters.js's GQL fetch). The metadata JSON is an array of quality tiers,
+// each { quality, count, interval, width, height, rows, cols, images[] }
+// covering the whole VOD. Note: count is total frames; rows/cols is the grid
+// per image, so frames spill across `images` in order, and image entries are
+// bare filenames resolved against the JSON's CDN directory.
 
 import { invoke } from "@tauri-apps/api/core";
 

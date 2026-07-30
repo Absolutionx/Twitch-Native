@@ -1,16 +1,8 @@
-// kick-aliases.js — Twitch-login -> Kick-slug mapping for the failover
-// and offline-entry paths in main.js.
-//
-// The Kick failover was built on a same-name assumption: Twitch stream
-// ends -> check kick.com/<same name>. Plenty of streamers break that
-// assumption (zackrawrr on Twitch is asmongold on Kick), and there is
-// no reliable automated way to discover the pairing - Kick's channel
-// payloads don't state a Twitch identity, and guessing via search
-// risks auto-playing a stranger's stream, which is far worse than not
-// failing over. So the mapping is explicit and user-set: the "Link
-// Kick" control on the Twitch channel info bar writes entries here.
-//
-// Stored in localStorage as {twitchLogin: kickSlug}, both lowercase.
+// Twitch-login -> Kick-slug mapping for the failover paths in main.js. The
+// same-name assumption breaks for many streamers (zackrawrr on Twitch is
+// asmongold on Kick) and can't be auto-discovered safely, so the mapping is
+// explicit and user-set (the "Link Kick" control). Stored in localStorage as
+// {twitchLogin: kickSlug}, lowercase.
 
 const STORAGE_KEY = "kickAliases";
 

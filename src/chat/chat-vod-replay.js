@@ -423,28 +423,11 @@ export const chatVodReplayMixin = {
           // the regular cursor pre-fetch in tick() keeps paging and the
           // chain reaches unseen comments within a page or two.
         } else {
-          // No new comments and no way forward on this chain: either
-          // hasNext=false (chain dead-ended - which Twitch does well
-          // before the VOD actually ends, see cursorExhausted's
-          // declaration), or the cursor didn't advance (the
-          // same-page-forever loop confirmed via a real log where
-          // fetchPage(8537.0) returned the identical 48 comments every
-          // time for over a minute). Either way, asking the same
-          // question again can only return the same answer - so search
-          // FORWARD: grow the offset nudge immediately (the old
-          // two-strikes gate just added a guaranteed extra wasted
-          // round-trip, since the overlap behavior makes the first
-          // frontier retry's emptiness a certainty, not a blip), and
-          // only slow the retry cadence once the search has cleared the
-          // whole lookahead window without finding anything - at that
-          // point the stretch is genuinely quiet (or the VOD is over)
-          // and hammering the API is pointless. While still INSIDE the
-          // window, retries stay at 1s: the viewer is owed those
-          // comments within seconds, and this search-not-backoff
-          // distinction is exactly what the old code lacked - it doubled
-          // the delay on every attempt, producing the rhythmic
-          // 1+2+4+8s... hang at every chain dead-end before the nudge
-          // finally escaped.
+          // Chain dead-ended (hasNext=false or cursor stuck returning the
+          // same page): searching again returns the same answer, so nudge the
+          // offset forward immediately rather than backing off. Retries stay
+          // at 1s while inside the lookahead window (the viewer is owed those
+          // comments); only slow down once the whole window comes back empty.
           fetchCursor = "";
           cursorExhausted = true;
           stuckOffsetNudge = Math.min(stuckOffsetNudge + 5, 60);
@@ -539,28 +522,12 @@ export const chatVodReplayMixin = {
         console.log(`[vod-chat] ${_ts()} BACKWARD SEEK detected  pos=${pos.toFixed(1)} < lastPos=${lastPosition.toFixed(1)}-5`);
         await resetAndFetch(pos);
       }
-      // Detect forward seek: position jumped much further ahead than one
-      // tick of normal playback could produce. Compared against
-      // lastPosition (actual elapsed time since the last tick), NOT
-      // against fetchedUpTo (the last fetched comment's timestamp) - the
-      // latter used to cause a false positive on every quiet stretch of
-      // chat: a VOD segment with no messages for more than LOOKAHEAD_S
-      // leaves fetchedUpTo plateaued at the last real comment's offset
-      // while pos keeps advancing completely normally, which looked
-      // identical to a real seek and reset chat replay roughly every
-      // ~LOOKAHEAD_S of silence even though nothing was ever seeked.
-      // The 5s pad is generous on purpose: getPosition() reads
-      // playbackControls.lastKnownPosition, which is only refreshed every
-      // PROGRESS_POLL_MS (1000ms - see playback-controls.js), not on this
-      // CHECK_MS=500ms tick's own cadence, so two consecutive ticks can
-      // legitimately see a position jump approaching ~1.5s under normal
-      // playback even with no seek at all (a stale read followed by a
-      // fresh one). 5s comfortably clears that with room to spare while
-      // still catching a real seek unambiguously (a deliberate seek is
-      // always a much bigger jump than ordinary polling jitter).
-      // The stale fetchCursor after a real seek would continue paginating
-      // from the old position, not the new one, so it must still be
-      // cleared and re-fetched from scratch when this DOES fire correctly.
+      // Detect a forward seek: position jumped further than one tick could
+      // produce. Compared against lastPosition, not fetchedUpTo (which
+      // plateaus on quiet stretches and looked like a seek). The 5s pad
+      // clears polling jitter (position refreshes every 1000ms vs this 500ms
+      // tick) while still catching real seeks. On a real seek the stale
+      // fetchCursor is cleared and re-fetched from scratch.
       else if (!wasAwaitingSync && lastPosition >= 0 && pos > lastPosition + (CHECK_MS / 1000) + 5) {
         console.log(`[vod-chat] ${_ts()} FORWARD SEEK (poll) detected  pos=${pos.toFixed(1)} > lastPos=${lastPosition.toFixed(1)}+threshold`);
         await resetAndFetch(pos);
@@ -588,32 +555,12 @@ export const chatVodReplayMixin = {
           console.log(`[vod-chat] ${_ts()} PRE-FETCH (cursor)  pos=${pos.toFixed(1)}  fetchedUpTo=${fetchedUpTo}`);
           fetchPage(pos);
         } else if (fetchedUpTo === -1 && !cursorExhausted) {
-          // Nothing has been successfully fetched since the last reset,
-          // AND we don't even have a confirmed-empty result yet (that's
-          // the !cursorExhausted check - once a real fetch comes back
-          // and confirms this stretch of the VOD genuinely has no
-          // comments, cursorExhausted flips true and control falls
-          // through to the backoff-respecting branch below instead,
-          // same as any other confirmed-empty case; without that guard
-          // this branch would keep retrying every tick with no backoff
-          // for a genuinely comment-free stretch, not just the race
-          // condition it's actually meant to catch).
-          //
-          // Normally the initial fetchPage() inside resetAndFetch()
-          // handles this, but that call is silently skipped (no retry
-          // scheduled) if ANOTHER fetch was still in flight at that exact
-          // moment - which happens when seeking rapidly: a second seek's
-          // resetAndFetch() can fire and await its own fetchPage() before
-          // the first seek's still-in-flight request has resolved, and
-          // fetchPage()'s `if (fetching) return` guard has no memory of
-          // the request it just dropped. Without this branch, the loop
-          // is left holding fetchCursor="" and cursorExhausted=false (a
-          // fresh reset's own values) forever - a state neither of the
-          // other two branches here ever retries, so chat replay just
-          // stops silently until the next seek happens to get luckier.
-          // Confirmed as the cause of "chat stops loading" reported after
-          // clicking around the seek bar quickly, intermittently (~20% of
-          // seeks, matching how timing-dependent this race is).
+          // Recovery for a dropped initial fetch: rapid seeks can make
+          // resetAndFetch()'s fetchPage() no-op (its `if (fetching) return`
+          // guard), leaving the loop stuck at fetchCursor="" /
+          // cursorExhausted=false with no other branch retrying. This retries
+          // until a real fetch confirms empty (then cursorExhausted flips and
+          // the backoff branch below takes over).
           console.log(`[vod-chat] ${_ts()} PRE-FETCH (recover stalled reset)  pos=${pos.toFixed(1)}`);
           fetchPage(pos);
         } else if (cursorExhausted && performance.now() - lastExhaustedRetryAt >= exhaustedRetryDelay) {

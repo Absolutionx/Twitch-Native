@@ -1,11 +1,6 @@
-// vod_progress.rs — persists how far into each VOD the user last got, so
-// closing and reopening the app (or just navigating away and back) can
-// resume where they left off, the same way Netflix/YouTube do.
-//
-// Same on-disk pattern as notify_prefs.rs: a single JSON file in
-// app_local_data_dir, load-whole-file/save-whole-file rather than a real
-// database - this app's data volumes are small enough that this is
-// simpler and more transparent to debug than adding a DB dependency.
+// Persists per-VOD playback position so the app can resume where the user left
+// off. Single JSON file in app_local_data_dir (whole-file load/save), same
+// pattern as notify_prefs.rs.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

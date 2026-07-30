@@ -1,22 +1,8 @@
-// kick-badges.js — renders Kick chat badges ("kick/{type}/{count}"
-// entries in a message's badges tag - see kick_badges_tag in
-// kick_chat.rs) into elements for the shared badge slot.
-//
-// Twitch badges are IMAGES served by Twitch's badge API and resolved
-// through badgeMap; Kick's equivalents are SVGs built into kick.com's
-// own frontend bundle with no public endpoint serving them per-badge,
-// so the art here is a set of small inline-SVG recreations of the
-// well-known Kick badge set (colors/silhouettes approximating the
-// site's). The one genuinely-fetched exception: SUBSCRIBER badges,
-// where channels upload custom art per month tier - that art IS a
-// plain https image (subscriber_badges on the channel payload, plumbed
-// through KickLiveInfo -> connectKick), and gets used months-matched
-// exactly like kick.com's chat, with the generic star below as the
-// fallback for channels that never customized theirs.
-//
-// Unknown badge types render as nothing rather than a broken square -
-// Kick adds event badges now and then, and silently skipping matches
-// how renderBadges already treats a Twitch pair missing from badgeMap.
+// Renders Kick chat badges ("kick/{type}/{count}" in the badges tag, see
+// kick_badges_tag in kick_chat.rs). Kick has no per-badge endpoint, so these
+// are inline-SVG recreations of the known set. Exception: subscriber badges are
+// real uploaded images (subscriber_badges on the channel payload), months-
+// matched with the generic star as fallback. Unknown types render nothing.
 
 const KICK_GREEN = "#53fc18";
 
