@@ -79,9 +79,18 @@ export class TwitchAuth {
     }
   }
 
+  // Writes the account button's text to its label span (so the leading
+  // person icon survives), falling back to the button itself if the span
+  // isn't present.
+  _setLoginLabel(text) {
+    const label = this.loginBtn.querySelector(".login-label");
+    if (label) label.textContent = text;
+    else this.loginBtn.textContent = text;
+  }
+
   async tryRestoreSession() {
     try {
-      this.loginBtn.textContent = "Restoring session…";
+      this._setLoginLabel("Restoring session…");
       this.loginBtn.disabled = true;
 
       const result = await invoke("restore_session");
@@ -90,29 +99,29 @@ export class TwitchAuth {
         await invoke("set_oauth_credentials", { accessToken: access_token, login, userId: user_id });
         this.login = login;
         const displayName = await this._resolveDisplayName(login, user_id);
-        this.loginBtn.textContent = displayName;
+        this._setLoginLabel(displayName);
         this.loginBtn.classList.add("logged-in");
         this.loginBtn.disabled = false;
         this.statusCallback(login, user_id, displayName);
       } else {
-        this.loginBtn.textContent = "Log in with Twitch";
+        this._setLoginLabel("Log in with Twitch");
         this.loginBtn.disabled = false;
       }
     } catch (err) {
       console.error("Session restore failed:", err);
-      this.loginBtn.textContent = "Log in with Twitch";
+      this._setLoginLabel("Log in with Twitch");
       this.loginBtn.disabled = false;
     }
   }
 
   async startLogin() {
     try {
-      this.loginBtn.textContent = "Logging in…";
+      this._setLoginLabel("Logging in…");
       this.loginBtn.disabled = true;
       await invoke("start_oauth_login");
     } catch (err) {
       console.error("Failed to start login:", err);
-      this.loginBtn.textContent = "Log in with Twitch";
+      this._setLoginLabel("Log in with Twitch");
       this.loginBtn.disabled = false;
     }
   }
@@ -125,7 +134,7 @@ export class TwitchAuth {
       console.error("Logout failed:", err);
     }
     this.login = null;
-    this.loginBtn.textContent = "Log in with Twitch";
+    this._setLoginLabel("Log in with Twitch");
     this.loginBtn.classList.remove("logged-in");
     this.loginBtn.disabled = false;
     this.statusCallback(null, null, null);
@@ -137,13 +146,13 @@ export class TwitchAuth {
       await invoke("set_oauth_credentials", { accessToken, login, userId: user_id });
       this.login = login;
       const displayName = await this._resolveDisplayName(login, user_id);
-      this.loginBtn.textContent = displayName;
+      this._setLoginLabel(displayName);
       this.loginBtn.classList.add("logged-in");
       this.loginBtn.disabled = false;
       this.statusCallback(login, user_id, displayName);
     } catch (err) {
       console.error("Token validation failed:", err);
-      this.loginBtn.textContent = "Log in with Twitch";
+      this._setLoginLabel("Log in with Twitch");
       this.loginBtn.disabled = false;
     }
   }

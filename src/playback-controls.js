@@ -765,6 +765,10 @@ export class PlaybackControls {
       console.warn("PiP: no active stream source to hand to the PiP window.");
       return;
     }
+    // Suppresses tab-out auto-PiP during creation: making a Tauri window
+    // steals focus, which would otherwise re-trigger the focus handler.
+    this._openingPip = true;
+    setTimeout(() => { this._openingPip = false; }, 800);
     // A "pip"-labeled window can outlive our handle to it (webview
     // reload during dev, a creation that raced teardown) - and window
     // labels are unique, so creating over a stale one fails outright.
@@ -1572,6 +1576,32 @@ export class PlaybackControls {
       });
 
       this.qualityMenu.appendChild(toggle);
+    }
+
+    // --- Auto-PiP on tab-out (global pref, live + vod) ---
+    {
+      const divider2 = document.createElement("div");
+      divider2.className = "quality-menu-divider";
+      this.qualityMenu.appendChild(divider2);
+
+      const autoPipOn = localStorage.getItem("autoPipOnBlur") === "1";
+      const t2 = document.createElement("button");
+      t2.className = "quality-menu-toggle" + (autoPipOn ? " on" : "");
+      t2.title = "Automatically open Picture-in-Picture when you switch away from the app";
+      const sw2 = document.createElement("span");
+      sw2.className = "quality-toggle-switch";
+      const l2 = document.createElement("span");
+      l2.textContent = "Auto-PiP on tab-out";
+      t2.appendChild(sw2);
+      t2.appendChild(l2);
+      t2.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const next = localStorage.getItem("autoPipOnBlur") !== "1";
+        localStorage.setItem("autoPipOnBlur", next ? "1" : "0");
+        t2.classList.toggle("on", next);
+        this.qualityMenu.classList.remove("open");
+      });
+      this.qualityMenu.appendChild(t2);
     }
   }
 

@@ -59,7 +59,7 @@ html, body {
      always win outright over the other instead of both applying. */
   --sidebar-width: 240px;
   --chat-width: 320px;
-  --header-height: 56px;
+  --header-height: 58px;
   display: grid;
   grid-template-columns: var(--sidebar-width) 1fr var(--chat-width);
   grid-template-rows: var(--header-height) 1fr;
@@ -157,10 +157,7 @@ html, body {
   overflow: hidden;
   border: none;
 }
-#app.app-fullscreen .header-collapse-toggle {
-  display: none;
-}
-#app.app-fullscreen #channel-info-bar {
+#app.app-fullscreen #app.app-fullscreen #channel-info-bar {
   display: none !important;
 }
 /* In fullscreen, #video-frame expands to fill the screen height (the
@@ -188,47 +185,28 @@ html, body {
 }
 header {
   grid-column: 1 / 4;
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 16px;
-  background: #18181b;
-  border-bottom: 1px solid #2c2c30;
-}
-/* Pinned top-left regardless of header's own collapsed state (see
-   #app.header-collapsed above) - this button is what brings the
-   header back, so it can never be inside the element it controls.
-   Rotates 180deg when collapsed (arrow points down -> up) as the
-   only visual indicator of state, since there's no header text
-   label like chat's "Collapse"/expand-strip pairing has room for
-   at this size. */
-.header-collapse-toggle {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  color: #6d6d72;
-  cursor: pointer;
-  z-index: 10000;
+  margin: 6px 10px;
   padding: 0;
+  height: 46px;
+  background: transparent;
+  border: none;
+  box-sizing: border-box;
 }
-.header-collapse-toggle:hover {
-  color: #efeff1;
-  background: rgba(255, 255, 255, 0.08);
-}
-#app.header-collapsed .header-collapse-toggle {
-  height: 14px;
-  background: #18181b;
-  border-bottom: 1px solid #2c2c30;
-}
-#app.header-collapsed .header-collapse-toggle svg {
-  transform: rotate(180deg);
+/* Right-side island: search + platform + account float together as one
+   raised pill, separate from the nav island on the left. */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 auto;
+  padding: 4px;
+  background: rgba(26, 26, 30, 0.96);
+  border: 1px solid #2c2c33;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
 }
 /* The launcher: input + Watch/Stop as ONE attached control (shared
    border line, outer corners rounded, inner seam square) - the field
@@ -238,11 +216,31 @@ header {
   align-items: stretch;
   position: relative;
 }
+/* Leading search icon inside the launcher input. */
+.launcher-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #7a7a85;
+  pointer-events: none;
+  z-index: 1;
+}
+.channel-launcher input { padding-left: 32px; }
+/* Platform toggle + account: icon sits before the label. */
+.platform-toggle, header #login-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.platform-icon, .account-icon { flex-shrink: 0; }
+body.kick-mode .platform-icon { display: none; }
 /* Live indicator while a stream is up: a small dot inside the input
    itself - the one place your eye already goes to see WHAT is playing.
    Replaces the old "Playing: x" pill, which restated both the input's
    text and the Stop button's existence. */
 .channel-launcher.playing input { padding-left: 27px; }
+.channel-launcher.playing .launcher-search-icon { display: none; }
 .channel-launcher.playing::before {
   content: "";
   position: absolute;
@@ -266,24 +264,24 @@ header {
   .channel-launcher.playing::before { animation: none; }
 }
 header input {
-  background: #0e0e10;
-  border: 1px solid #3a3a3d;
-  border-right: none;
+  background: #0b0b0d;
+  border: none;
   color: #efeff1;
   padding: 6px 10px;
-  border-radius: 4px 0 0 4px;
-  font-size: 14px;
-  width: 220px;
-  height: 34px;
+  border-radius: 7px 0 0 7px;
+  font-size: 13px;
+  width: 180px;
+  height: 32px;
   box-sizing: border-box;
 }
 header input:focus {
   outline: none;
-  border-color: var(--accent);
+  background: #131316;
 }
 header .channel-launcher #watch-btn {
-  border-radius: 0 4px 4px 0;
-  height: 34px;
+  border-radius: 0 7px 7px 0;
+  height: 32px;
+  font-weight: 500;
   box-sizing: border-box;
 }
 header button {
@@ -291,8 +289,8 @@ header button {
   border: none;
   color: white;
   padding: 7px 16px;
-  border-radius: 4px;
-  font-size: 14px;
+  border-radius: 8px;
+  font-size: 13px;
   cursor: pointer;
 }
 header button:hover {
@@ -300,21 +298,20 @@ header button:hover {
 }
 header #login-btn {
   background: transparent;
-  border: 1px solid #3a3a3d;
+  border: none;
   color: #efeff1;
 }
 header #login-btn:hover {
   background: #2c2c30;
 }
 header #login-btn.logged-in {
-  border-color: var(--accent);
-  color: #efeff1;
-  background: rgba(145, 71, 255, 0.12);
+  border: none;
+  color: var(--accent-text);
+  background: rgba(145, 71, 255, 0.14);
   cursor: pointer;
 }
 header #login-btn.logged-in:hover {
   background: rgba(145, 71, 255, 0.22);
-  border-color: var(--accent-text);
 }
 /* Sign-out dropdown that appears below the username button.
    Same fixed-position/JS-positioned pattern as .quality-menu. */
@@ -421,34 +418,41 @@ header .status {
 header .status:empty { display: none; }
 /* Account control anchors the right edge; chip-shaped so it reads as
    identity, not as an action next to Watch. */
-header #login-btn { margin-left: auto; border-radius: 999px; padding: 6px 14px; }
-header #login-btn.logged-in { border-radius: 999px; }
+header #login-btn { border-radius: 7px; padding: 0 12px; height: 32px; }
+header #login-btn.logged-in { border-radius: 7px; }
 .nav-tabs {
+  position: absolute;
+  left: 0;
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-right: 8px;
+  gap: 2px;
+  background: rgba(26, 26, 30, 0.96);
+  border: 1px solid #2c2c33;
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
 }
 .nav-tab {
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  color: #adadb8;
-  padding: 8px 4px;
+  color: #c0c0c8;
+  padding: 6px 14px;
   cursor: pointer;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-radius: 6px;
   background: none;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 .nav-tab:hover {
   color: #efeff1;
 }
 .nav-tab-active {
-  color: #efeff1;
-  border-bottom-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
 }
 .nav-tab-active:hover {
-  color: #efeff1;
+  color: #fff;
 }
 /* "Now watching: <channel>" pill - see the HTML comment on
    #back-to-stream-btn for why this exists. Styled as a filled pill
@@ -458,12 +462,12 @@ header #login-btn.logged-in { border-radius: 999px; }
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-right: 8px;
-  padding: 6px 12px;
+  padding: 0 11px;
+  height: 32px;
   background: var(--accent);
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 7px;
   font: inherit;
   font-size: 13px;
   font-weight: 600;
@@ -3968,21 +3972,23 @@ body.kick-mode .sidebar-channel-name {
 .platform-toggle {
   font: inherit;
   font-size: 13px;
-  font-weight: 700;
-  padding: 4px 14px;
-  margin-left: 10px;
+  font-weight: 600;
+  padding: 0 11px;
+  height: 32px;
   cursor: pointer;
-  background: none;
-  border-radius: 999px;
-  border: 2px solid var(--accent); /* Twitch purple - the default state */
-  color: #efeff1;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  background: var(--accent-soft);
+  border-radius: 7px;
+  border: 1px solid var(--accent);
+  color: var(--accent-text);
+  transition: filter 0.15s ease;
 }
 .platform-toggle:hover {
   filter: brightness(1.2);
 }
 .platform-toggle.platform-kick {
-  border-color: #53fc18; /* Kick green */
+  border-color: #53fc18;
+  background: #53fc1820;
+  color: #7dfc52;
 }
 
 /* ── Kick login button ───────────────────────────────────────────────
@@ -4283,67 +4289,132 @@ body.kick-mode .channel-info-follow-btn.is-following {
 .multiview-overlay.multiview-open { display: flex; }
 
 .multiview-bar {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  background: #18181b;
-  border-bottom: 1px solid #2a2a2e;
+  gap: 5px;
+  padding: 6px 8px;
+  background: rgba(20, 20, 23, 0.94);
+  border: 1px solid #38383f;
+  border-radius: 12px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
   flex-shrink: 0;
+  transition: opacity 0.25s ease, transform 0.25s ease;
 }
-.multiview-title { font-weight: 700; color: #efeff1; font-size: 14px; }
+/* Auto-hide: fades and lifts away when the mouse is idle over MultiView. */
+.multiview-overlay.multiview-bar-hidden .multiview-bar {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-8px);
+  pointer-events: none;
+}
+.multiview-bar-divider {
+  width: 1px;
+  height: 20px;
+  background: #3a3a42;
+  margin: 0 2px;
+}
+.multiview-title {
+  font-weight: 600;
+  color: #fff;
+  font-size: 13px;
+  padding: 0 6px;
+}
+.multiview-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: #d0d0d6;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.multiview-icon-btn:hover { background: #2e2e35; color: #fff; }
+/* Custom tooltips for the command-bar buttons - native title tooltips get
+   cancelled when the bar re-renders/auto-hides, so they'd flicker or not show.
+   These render reliably on hover. */
+.mv-tip { position: relative; }
+.mv-tip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 9px;
+  background: #000;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  border-radius: 6px;
+  border: 1px solid #3a3a42;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease 0.35s;
+  z-index: 40;
+}
+.mv-tip:hover::after { opacity: 1; }
+.multiview-icon-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.multiview-followed-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: #d0d0d6;
+  cursor: pointer;
+}
+.multiview-followed-btn:hover { background: #2e2e35; color: #fff; }
+.multiview-title { font-weight: 600; color: #fff; font-size: 13px; padding: 0 6px; }
 .multiview-add { display: flex; gap: 6px; }
 .multiview-add-input {
-  background: #0e0e10;
-  border: 1px solid #33333b;
-  border-radius: 4px;
+  background: #0b0b0d;
+  border: 1px solid #313138;
+  border-radius: 7px;
   color: #efeff1;
-  padding: 4px 8px;
+  padding: 0 10px;
+  height: 32px;
   font-size: 13px;
-  width: 180px;
+  width: 150px;
 }
+.multiview-add-input:focus { outline: none; border-color: var(--accent); }
 .multiview-add-input:focus { outline: none; border-color: var(--accent); }
 .multiview-add-btn {
   background: var(--accent);
   border: none;
-  border-radius: 4px;
+  border-radius: 7px;
   color: #fff;
-  padding: 4px 12px;
+  padding: 0 13px;
+  height: 32px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
 }
 .multiview-add-btn:hover { background: var(--accent-dark); }
-.multiview-count { color: #adadb8; font-size: 12px; }
-.multiview-theater {
-  background: #26262c;
-  border: 1px solid #33333b;
-  color: #efeff1;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1;
-  cursor: pointer;
-  padding: 7px 14px;
-  border-radius: 4px;
+.multiview-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 6px;
+  background: var(--accent-soft); color: var(--accent-text);
+  font-size: 11px; font-weight: 600; border-radius: 9px;
 }
-.multiview-theater:hover { background: #33333b; }
-.multiview-theater.active {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent-text);
-}
-.multiview-close {
-  background: var(--accent);
-  border: none;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1;
-  cursor: pointer;
-  padding: 7px 14px;
-  border-radius: 4px;
-}
-.multiview-close:hover { background: var(--accent-dark); }
+.multiview-count:empty { display: none; }
 
 /* Body splits into the video grid (flex-grow) and a fixed chat sidebar, so
    the grid gets ALL remaining width - videos are as large as possible while
@@ -4365,7 +4436,9 @@ body.kick-mode .channel-info-follow-btn.is-following {
   gap: 6px;
   padding: 6px;
   overflow: auto;
-  grid-auto-rows: 1fr;
+  grid-auto-rows: min-content;
+  align-content: center;
+  justify-content: center;
 }
 .multiview-empty {
   position: absolute;
@@ -4435,8 +4508,102 @@ body.kick-mode .channel-info-follow-btn.is-following {
   border-radius: 6px;
   overflow: hidden;
   min-height: 0;
+  aspect-ratio: 16 / 9;
+  width: 100%;
 }
-.multiview-tile.multiview-tile-focused { border-color: var(--accent); }
+/* Split mode (2 tiles, draggable): tiles fill their grid cell exactly rather
+   than forcing 16:9, so the drag gives a precise split. */
+.multiview-grid-split { grid-template-rows: 1fr !important; align-content: stretch; }
+.multiview-grid-split .multiview-tile {
+  aspect-ratio: auto;
+  width: auto;
+  height: 100%;
+}
+.multiview-split-handle {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  width: 12px;
+  transform: translateX(-50%);
+  cursor: col-resize;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.multiview-split-handle::before {
+  content: "";
+  width: 4px;
+  height: 46px;
+  border-radius: 3px;
+  background: rgba(145, 71, 255, 0.55);
+  transition: background 0.12s ease, height 0.12s ease;
+}
+.multiview-split-handle:hover::before { background: var(--accent); height: 64px; }
+/* Spotlight mode (3+ tiles): focused tile is big on top, others in a bottom
+   strip. The grid template (rows + strip columns) is set in _applySpotlight. */
+.multiview-grid-spotlight {
+  align-content: stretch !important;
+  justify-content: stretch !important;
+}
+.multiview-grid-spotlight .multiview-tile {
+  aspect-ratio: auto;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  min-width: 0;
+}
+.multiview-grid-spotlight .multiview-tile-spot-main {
+  grid-row: 1;
+  grid-column: 1 / -1;   /* span the full top row */
+}
+.multiview-tile.multiview-tile-focused { border-color: transparent; }
+/* Smaller tiles (split panes, spotlight strip) get a tighter border so 2px
+   doesn't look chunky at small sizes. */
+.multiview-grid-split .multiview-tile,
+.multiview-grid-spotlight .multiview-tile {
+  border-width: 1px;
+}
+.multiview-grid-spotlight .multiview-tile-spot-main {
+  border-width: 2px; /* the big one can keep a fuller border */
+}
+.multiview-tile.multiview-tile-dragging {
+  opacity: 0.4;
+  pointer-events: none; /* so elementFromPoint sees the tile underneath */
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.multiview-tile.multiview-tile-dragover {
+  outline: 3px dashed var(--accent-light);
+  outline-offset: -3px;
+}
+.multiview-tile.multiview-tile-dragover::after {
+  content: "Swap here";
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 5;
+}
+.multiview-drag-ghost {
+  position: fixed;
+  z-index: 12000;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 6px;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+  white-space: nowrap;
+}
 /* In theater mode only the focused tile is shown, so the "which one is
    selected" border is redundant - drop it for a clean full-bleed view. */
 .multiview-theater-on .multiview-tile.multiview-tile-focused { border-color: transparent; }
@@ -4476,12 +4643,13 @@ body.multiview-active .deps-banner {
 }
 .multiview-tile-overlay {
   position: absolute;
-  top: 0; left: 0; right: 0;
+  bottom: 0; left: 0; right: 0;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  background: linear-gradient(180deg, rgba(0,0,0,0.7), transparent);
+  background: linear-gradient(0deg, rgba(0,0,0,0.7), transparent);
   opacity: 0;
   transition: opacity 0.15s ease;
 }
@@ -4516,43 +4684,14 @@ body.multiview-active .deps-banner {
   accent-color: var(--accent);
   vertical-align: middle;
 }
-.multiview-multiaudio {
-  margin-left: auto;
-  background: #26262c;
-  border: 1px solid #33333b;
-  color: #efeff1;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1;
-  cursor: pointer;
-  padding: 7px 14px;
-  border-radius: 4px;
-}
-.multiview-multiaudio:hover { background: #33333b; }
-.multiview-multiaudio.active {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent-text);
-}
 
 
 /* MultiView followed-channels picker */
-.multiview-followed-btn {
-  background: #26262c;
-  border: 1px solid #3a3a42;
-  color: #efeff1;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  padding: 6px 13px;
-  border-radius: 6px;
-  transition: background 0.12s ease, border-color 0.12s ease;
-}
-.multiview-followed-btn:hover { background: #33333b; border-color: var(--accent); }
 .multiview-followed-panel {
   position: absolute;
-  top: 52px;
-  left: 12px;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 30;
   width: 340px;
   max-height: min(70vh, 620px);

@@ -5,6 +5,7 @@
 // itself while it exists and restores on close; there's no ongoing coordination.
 
 import { getCurrentWindow, currentMonitor, availableMonitors, primaryMonitor, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { attachMseStream } from "./stream-player.js";
 import { attachHlsVod } from "./vod-player.js";
 
@@ -21,6 +22,8 @@ const volume  = Math.min(1, Math.max(0, parseFloat(params.get("volume") ?? "1"))
 const muted   = params.get("muted") === "1";
 const channel = params.get("channel") || "";
 const lowSrc  = params.get("lowsrc") || "";
+const mvChannel = params.get("mvchannel") || "";
+const mvQuality = params.get("mvquality") || "best";
 
 const videoEl   = document.getElementById("pip-video");
 const playBtn   = document.querySelector('[data-act="playpause"]');
@@ -258,6 +261,25 @@ function attachLiveFeeder() {
     onDead: (reason) => handleFeederDeath(reason),
   });
 }
+
+// MultiView PiP: resolve the live HLS m3u8 ourselves (the channel/quality
+// come in as params - the URL is too big to pass directly), then play it via
+// attachHlsVod, the same native-HLS path MultiView tiles use.
+async function attachMvLiveFeeder() {
+  let url;
+  try {
+    url = await invoke("get_live_m3u8_url", { channel: mvChannel, quality: mvQuality });
+  } catch (err) {
+    console.error("[pip:mv] couldn't resolve stream:", err);
+    return;
+  }
+  feeder = attachHlsVod(videoEl, url, {
+    startPosition: -1, // live edge
+    onFatalError: () => handleFeederDeath("HLS pipeline failed"),
+    smallPlayer: true,
+    logPrefix: "[pip:mv]",
+  });
+}
 function handleFeederDeath(reason) {
   const now = Date.now();
   if (now - lastDeadAt > 60_000) deadRetries = 0; // a healthy minute resets the budget
@@ -292,14 +314,24 @@ function attachVodFeeder(url, isLowQuality) {
     logPrefix: "[pip:hls]",
   });
 }
-if (src) {
-  if (mode === "vod") {
-    // Prefer the pre-resolved low-quality playlist (right-sized
-    // segments for a small window - see resolvePipVodUrl in main.js);
-    // src remains the fallback.
-    attachVodFeeder(lowSrc || src, Boolean(lowSrc));
-  } else {
-    attachLiveFeeder();
+if (mode === "mv") {
+  // mv resolves its own URL from mvchannel/mvquality (no src param).
+  try { attachMvLiveFeeder(); }
+  catch (err) { console.error("[pip] mv feeder attach failed:", err); }
+} else if (src) {
+  try {
+    if (mode === "vod") {
+      // Prefer the pre-resolved low-quality playlist (right-sized
+      // segments for a small window - see resolvePipVodUrl in main.js);
+      // src remains the fallback.
+      attachVodFeeder(lowSrc || src, Boolean(lowSrc));
+    } else {
+      attachLiveFeeder();
+    }
+  } catch (err) {
+    // A feeder failure must not skip the control wiring below (close/drag),
+    // or the window becomes uncloseable.
+    console.error("[pip] feeder attach failed:", err);
   }
 } else {
   console.error("[pip] opened without a src param - nothing to play.");

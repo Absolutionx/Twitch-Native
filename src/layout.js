@@ -11,7 +11,6 @@ const appWindow = getCurrentWindow();
 const appEl = document.getElementById("app");
 const theaterBtn = document.getElementById("theater-btn");
 const fullscreenBtn = document.getElementById("fullscreen-btn");
-const headerCollapseToggle = document.getElementById("header-collapse-toggle");
 const homeTab = document.getElementById("home-tab");
 const browseTab = document.getElementById("browse-tab");
 const backToStreamBtn = document.getElementById("back-to-stream-btn");
@@ -142,12 +141,10 @@ export function setTheaterMode(on) {
   if (on) {
     if (!appEl.classList.contains("header-collapsed")) {
       appEl.classList.add("header-collapsed");
-      headerCollapseToggle.title = "Expand top bar";
       _headerAutoCollapsedByTheater = true;
     }
   } else if (_headerAutoCollapsedByTheater) {
     appEl.classList.remove("header-collapsed");
-    headerCollapseToggle.title = "Collapse top bar";
     _headerAutoCollapsedByTheater = false;
   }
 }
@@ -173,7 +170,6 @@ export function toggleTheaterModeAndResync() {
 export function toggleHeaderCollapse() {
   const collapsed = !appEl.classList.contains("header-collapsed");
   appEl.classList.toggle("header-collapsed", collapsed);
-  headerCollapseToggle.title = collapsed ? "Expand top bar" : "Collapse top bar";
   // This is now a deliberate, manual choice by the user (clicking the
   // button directly) - it always overrides whatever theater mode was
   // tracking, regardless of which direction either is currently set to.

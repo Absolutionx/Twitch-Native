@@ -242,8 +242,16 @@ fn main() {
                     // belt-and-braces: CloseRequested for the user's X,
                     // Destroyed for programmatic teardown - the second
                     // close of an already-closing window is a no-op.
-                    if let Some(pip) = window.app_handle().get_webview_window("pip") {
-                        let _ = pip.close();
+                    // Close every PiP window (labels "pip" and "pip-*") when
+                    // the main window dies - Tauri exits only when all windows
+                    // are gone, and a native PiP counts. Covers every route the
+                    // main window can die, including ones the main webview's JS
+                    // never sees. Both events are belt-and-braces: CloseRequested
+                    // for the user's X, Destroyed for programmatic teardown.
+                    for (label, w) in window.app_handle().webview_windows() {
+                        if label == "pip" || label.starts_with("pip-") {
+                            let _ = w.close();
+                        }
                     }
                     // (The old streamlink/mpv child-process cleanup that
                     // used to live here is no longer needed - playback runs

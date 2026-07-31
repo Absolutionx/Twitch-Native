@@ -7,6 +7,7 @@
 
 import { attachHlsVod } from "./vod-player.js";
 import { invoke } from "@tauri-apps/api/core";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TwitchChat } from "./chat.js";
 
 export class MultiView {
@@ -18,6 +19,7 @@ export class MultiView {
     this._chat = null;         // single shared TwitchChat, follows focus
     this._chatChannel = null;  // channel the shared chat is connected to
     this._theater = false;     // theater mode: only the focused tile shows
+    this._spotlight = true;    // 3+ tiles: one big + strip (vs even grid)
     this._multiAudio = false;   // multi-audio mode: independent per-tile audio.
                                 // Default OFF = single-focus (clicking a tile
                                 // moves audio to it, mutes the rest).
@@ -40,10 +42,14 @@ export class MultiView {
     root.innerHTML = `
       <div class="multiview-bar">
         <span class="multiview-title">MultiView</span>
+        <span class="multiview-count"></span>
+        <span class="multiview-bar-divider"></span>
         <div class="multiview-add">
-          <button class="multiview-followed-btn" title="Add from your followed channels">+ Followed</button>
+          <button class="multiview-followed-btn mv-tip" data-tooltip="Add from followed">
+            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+          </button>
           <input type="text" class="multiview-add-input"
-                 placeholder="or type a channel..." spellcheck="false" />
+                 placeholder="Add a channel..." spellcheck="false" />
           <button class="multiview-add-btn">Add</button>
         </div>
         <div class="multiview-followed-panel" style="display:none">
@@ -53,10 +59,23 @@ export class MultiView {
           </div>
           <div class="multiview-followed-list"></div>
         </div>
-        <span class="multiview-count"></span>
-        <button class="multiview-multiaudio" title="Multi-audio: hear several streams at once (off by default)">Multi-audio</button>
-        <button class="multiview-theater" title="Theater mode: focus the selected stream (T)">Theater</button>
-        <button class="multiview-close" title="Close (Esc)">&larr; Back</button>
+        <span class="multiview-bar-divider"></span>
+        <button class="multiview-autopip multiview-icon-btn mv-tip" data-tooltip="Auto-PiP on tab-out">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M3 5h18v14H3V5zm10 5h6v5h-6v-5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="multiview-multiaudio multiview-icon-btn mv-tip" data-tooltip="Multi-audio">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm12.5 3a4 4 0 00-2-3.5M18.5 12a7 7 0 00-3.5-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="multiview-theater multiview-icon-btn mv-tip" data-tooltip="Theater (T)">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M3 5h18v14H3V5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="multiview-spotlight multiview-icon-btn mv-tip" data-tooltip="Spotlight layout">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M3 4h18v10H3V4zm0 13h5v3H3v-3zm7 0h5v3h-5v-3zm7 0h4v3h-4v-3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        </button>
+        <span class="multiview-bar-divider"></span>
+        <button class="multiview-close multiview-icon-btn mv-tip" data-tooltip="Close (Esc)">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </button>
       </div>
       <div class="multiview-body">
         <div class="multiview-grid-wrap">
@@ -104,6 +123,36 @@ export class MultiView {
     this.countEl = root.querySelector(".multiview-count");
     this.chatChannelEl = root.querySelector(".multiview-chat-channel");
 
+    // Auto-hide the floating command bar. Only mouse movement over the video
+    // grid area reveals it (moving the mouse in the chat sidebar shouldn't wake
+    // it). Any move there resets a 2.5s idle timer; the bar stays put while
+    // hovered or while the followed panel is open so it can't vanish mid-action.
+    this._barIdleTimer = null;
+    const revealBar = () => {
+      root.classList.remove("multiview-bar-hidden");
+      if (this._barIdleTimer) clearTimeout(this._barIdleTimer);
+      this._barIdleTimer = setTimeout(() => {
+        const bar = root.querySelector(".multiview-bar");
+        const panelOpen = this.followedPanel && this.followedPanel.style.display !== "none";
+        if (bar && bar.matches(":hover")) return; // don't hide under the cursor
+        if (panelOpen) return;
+        root.classList.add("multiview-bar-hidden");
+      }, 2500);
+    };
+    const gridWrap = root.querySelector(".multiview-grid-wrap");
+    gridWrap?.addEventListener("mousemove", revealBar);
+    // Hovering the floating bar itself keeps it alive (it can extend beyond the
+    // grid-wrap's mousemove coverage while shown).
+    root.querySelector(".multiview-bar")?.addEventListener("mousemove", (e) => {
+      e.stopPropagation();
+      revealBar();
+    });
+    this._revealBar = revealBar;
+
+    // Recompute 16:9 tile sizing when the window resizes.
+    this._onResize = () => { if (this._open) this._refreshLayout(); };
+    window.addEventListener("resize", this._onResize);
+
     // One shared chat that reconnects to the focused channel. Only one channel
     // is ever connected, so the global chat-message event stays unambiguous.
     this._chat = new TwitchChat({
@@ -127,6 +176,26 @@ export class MultiView {
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") add(); });
     root.querySelector(".multiview-close").addEventListener("click", () => this.close());
     root.querySelector(".multiview-theater").addEventListener("click", () => this.toggleTheater());
+    // Spotlight vs even-grid layout (only affects 3+ tiles).
+    const spotBtn = root.querySelector(".multiview-spotlight");
+    spotBtn.classList.toggle("active", this._spotlight);
+    spotBtn.addEventListener("click", () => {
+      this._spotlight = !this._spotlight;
+      spotBtn.classList.toggle("active", this._spotlight);
+      this._refreshLayout();
+    });
+    // Auto-PiP shares the same localStorage key as the single-view setting, so
+    // toggling here or there stays in sync (it's one global preference).
+    const autoPipBtn = root.querySelector(".multiview-autopip");
+    const syncAutoPipBtn = () => {
+      autoPipBtn.classList.toggle("active", localStorage.getItem("autoPipOnBlur") === "1");
+    };
+    syncAutoPipBtn();
+    autoPipBtn.addEventListener("click", () => {
+      const next = localStorage.getItem("autoPipOnBlur") !== "1";
+      localStorage.setItem("autoPipOnBlur", next ? "1" : "0");
+      syncAutoPipBtn();
+    });
     root.querySelector(".multiview-multiaudio").addEventListener("click", () => this.toggleMultiAudio());
 
     this.followedPanel = root.querySelector(".multiview-followed-panel");
@@ -288,9 +357,15 @@ export class MultiView {
         return;
       }
       if (e.key === "Escape") {
-        // Back out one level: theater first, else close.
-        if (this._theater) this.toggleTheater();
-        else this.close();
+        // Back out one level at a time: followed panel, then theater, then
+        // close the overlay.
+        if (this.followedPanel && this.followedPanel.style.display !== "none") {
+          this._toggleFollowedPanel(false);
+        } else if (this._theater) {
+          this.toggleTheater();
+        } else {
+          this.close();
+        }
       }
       else if (e.key === "t" || e.key === "T") this.toggleTheater();
     };
@@ -299,10 +374,20 @@ export class MultiView {
     document.getElementById("multiview-tab")?.classList.add("nav-tab-active");
     for (const ch of initialChannels) this.addChannel(ch);
     this._refreshLayout();
+    // Recompute once the overlay has actually been laid out (clientWidth/Height
+    // are 0 until then).
+    requestAnimationFrame(() => this._refreshLayout());
+    this._revealBar?.(); // show the bar, then let it auto-hide when idle
   }
 
   close() {
     this._open = false;
+    // Tear down any drag left in progress (removes window listeners + ghost).
+    if (this._activeDragCleanup) this._activeDragCleanup();
+    this._removeSplitHandle();
+    if (this._barIdleTimer) { clearTimeout(this._barIdleTimer); this._barIdleTimer = null; }
+    if (this._onResize) { window.removeEventListener("resize", this._onResize); this._onResize = null; }
+    this.rootEl?.classList.remove("multiview-bar-hidden");
     if (this.rootEl) this.rootEl.classList.remove("multiview-open");
     document.body.classList.remove("multiview-active");
     if (this._escHandler) {
@@ -369,6 +454,7 @@ export class MultiView {
     tileEl.querySelector(".multiview-tile-video")
       .addEventListener("click", (e) => {
         if (e.target.closest(".multiview-tile-actions")) return; // let buttons act
+        if (this._justDragged) return; // ignore the click that ends a drag
         this.focus(channel);
       });
     tileEl.querySelector(".multiview-tile-remove")
@@ -384,20 +470,10 @@ export class MultiView {
     tileEl.querySelector(".multiview-tile-quality")
       .addEventListener("change", (e) => this._setQuality(channel, e.target.value));
     tileEl.querySelector(".multiview-tile-pip")
-      .addEventListener("click", async (e) => {
+      .addEventListener("click", (e) => {
         e.stopPropagation();
-        try {
-          if (document.pictureInPictureElement === videoEl) {
-            await document.exitPictureInPicture();
-          } else if (document.pictureInPictureEnabled) {
-            await videoEl.requestPictureInPicture();
-          }
-        } catch { /* PiP can reject if not allowed; ignore */ }
+        this.popOutToNativePip(channel);
       });
-    // A tile can stall after returning from PiP; recover to the live edge.
-    videoEl.addEventListener("leavepictureinpicture", () => {
-      this._recoverLiveEdge(record);
-    });
     tileEl.querySelector(".multiview-tile-fs")
       .addEventListener("click", (e) => {
         e.stopPropagation();
@@ -408,38 +484,115 @@ export class MultiView {
         } catch { /* ignore */ }
       });
 
+    // Drag-to-reorder: the whole tile is draggable. A movement threshold keeps
+    // a plain click as focus (not a drag), and pointerdowns landing on the
+    // controls/overlay are ignored so buttons and sliders still work.
+    tileEl.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return; // left button only
+      if (e.target.closest(".multiview-tile-actions, .multiview-tile-overlay, .multiview-tile-quality, input, button, select")) return;
+      this._maybeBeginTileDrag(channel, tileEl, e);
+    });
+
     await this._loadVideo(record, loadingEl);
     // First tile added becomes the audio focus automatically.
     if (!this.focusedChannel) this.focus(channel);
     this._refreshLayout();
   }
 
-  // Seek a stalled tile back to the live edge; reload if that fails.
-  _recoverLiveEdge(record) {
-    const v = record.videoEl;
-    if (!v) return;
-    // Give the element a tick to settle after the PiP transition.
-    setTimeout(() => {
-      try {
-        if (v.seekable && v.seekable.length > 0) {
-          const liveEdge = v.seekable.end(v.seekable.length - 1);
-          // Only jump if we've genuinely fallen behind, to avoid a needless
-          // seek that itself causes a hiccup.
-          if (liveEdge - v.currentTime > 2) v.currentTime = liveEdge - 0.5;
-        }
-        const p = v.play();
-        if (p) {
-          p.catch(() => {
-            // Still stuck - reload the stream from scratch as a last resort.
-            const loadingEl = record.tileEl.querySelector(".multiview-tile-loading");
-            this._loadVideo(record, loadingEl);
-          });
-        }
-      } catch {
-        const loadingEl = record.tileEl.querySelector(".multiview-tile-loading");
-        this._loadVideo(record, loadingEl);
+  /** Pointer-based tile drag: a ghost chip follows the cursor, the hovered
+   *  tile highlights, and releasing swaps them. */
+  /** Waits for the pointer to move past a small threshold before committing to
+   *  a drag, so a plain click still focuses the tile (handled separately). */
+  _maybeBeginTileDrag(channel, tileEl, downEvent) {
+    const startX = downEvent.clientX, startY = downEvent.clientY;
+    const THRESHOLD = 6; // px of movement before it counts as a drag
+    let armed = true;
+    const onMove = (e) => {
+      if (!armed) return;
+      if (Math.abs(e.clientX - startX) > THRESHOLD || Math.abs(e.clientY - startY) > THRESHOLD) {
+        armed = false;
+        cleanup();
+        this._beginTileDrag(channel, tileEl, e);
       }
-    }, 150);
+    };
+    const onUp = () => { armed = false; cleanup(); };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  _beginTileDrag(channel, tileEl, downEvent) {
+    tileEl.classList.add("multiview-tile-dragging");
+    let overEl = null;
+
+    // A floating chip under the cursor so it's obvious something is being
+    // dragged (the tile itself stays in the grid, just dimmed).
+    const ghost = document.createElement("div");
+    ghost.className = "multiview-drag-ghost";
+    ghost.textContent = `⠿  ${channel}`;
+    document.body.appendChild(ghost);
+    const moveGhost = (x, y) => {
+      ghost.style.left = `${x + 12}px`;
+      ghost.style.top = `${y + 12}px`;
+    };
+    moveGhost(downEvent.clientX, downEvent.clientY);
+
+    const clearOver = () => {
+      if (overEl) { overEl.classList.remove("multiview-tile-dragover"); overEl = null; }
+    };
+    const onMove = (e) => {
+      moveGhost(e.clientX, e.clientY);
+      // The dragged tile has pointer-events suppressed (see CSS) so
+      // elementFromPoint returns the tile underneath, not the one we're moving.
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const targetTile = el?.closest?.(".multiview-tile");
+      if (targetTile && targetTile !== tileEl) {
+        if (overEl !== targetTile) { clearOver(); overEl = targetTile; overEl.classList.add("multiview-tile-dragover"); }
+      } else {
+        clearOver();
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      this._activeDragCleanup = null;
+      tileEl.classList.remove("multiview-tile-dragging");
+      ghost.remove();
+      const targetCh = overEl?.dataset?.channel;
+      clearOver();
+      if (targetCh && targetCh !== channel) this._swapTiles(channel, targetCh);
+      // Swallow the click that fires right after this pointerup.
+      this._justDragged = true;
+      setTimeout(() => { this._justDragged = false; }, 0);
+    };
+    // Exposed so close() can tear down a drag left in progress.
+    this._activeDragCleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      tileEl.classList.remove("multiview-tile-dragging");
+      ghost.remove();
+      clearOver();
+      this._activeDragCleanup = null;
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  /** Swaps two tiles' positions in the grid DOM (drag-to-reorder). */
+  _swapTiles(chA, chB) {
+    const a = this.tiles.get(chA)?.tileEl;
+    const b = this.tiles.get(chB)?.tileEl;
+    if (!a || !b || a === b) return;
+    // Swap DOM positions using placeholder nodes so it works regardless of
+    // whether the two are adjacent.
+    const marker = document.createElement("div");
+    a.parentNode.insertBefore(marker, a);
+    b.parentNode.insertBefore(a, b);
+    marker.parentNode.insertBefore(b, marker);
+    marker.remove();
   }
 
   async _loadVideo(record, loadingEl) {
@@ -498,26 +651,18 @@ export class MultiView {
     }
   }
 
-  focus(channel) {
+  focus(channel, { keepAudio = false } = {}) {
     this.focusedChannel = channel;
     for (const [ch, rec] of this.tiles) {
       const focused = ch === channel;
       rec.tileEl.classList.toggle("multiview-tile-focused", focused);
-      if (!this._multiAudio) {
+      if (!this._multiAudio && !keepAudio) {
         // Single-focus: only the focused tile is audible, at its saved level.
-        const isPip = document.pictureInPictureElement === rec.videoEl;
         if (focused) {
           if (rec.volumeLevel == null || rec.volumeLevel === 0) rec.volumeLevel = 1;
           rec.videoEl.muted = false;
           rec.videoEl.volume = rec.volumeLevel;
           rec.videoEl.play().catch(() => {});
-        } else if (isPip) {
-          // A PiP'd tile keeps its audio even when unfocused (same <video>
-          // element backs both), and gets a play() nudge to avoid stalling.
-          if (rec.volumeLevel == null || rec.volumeLevel === 0) rec.volumeLevel = 1;
-          rec.videoEl.muted = false;
-          rec.videoEl.volume = rec.volumeLevel;
-          if (rec.videoEl.paused) rec.videoEl.play().catch(() => {});
         } else {
           rec.videoEl.muted = true;
           rec.videoEl.volume = 0;
@@ -525,10 +670,16 @@ export class MultiView {
         }
         this._updateTileAudioUi(rec);
       }
-      // Multi-audio: sliders own the audio; focus only changes chat + highlight.
+      // Multi-audio (or keepAudio): leave audio as-is; focus only moves the
+      // highlight + chat.
     }
     this._connectChat(channel);
     this._applyTheater();
+    // In spotlight, the focused tile is the big one - refresh so clicking a
+    // strip tile promotes it into the main slot.
+    if (this._spotlight && this.tiles.size >= 3 && !this._theater) {
+      this._applySpotlight();
+    }
   }
 
   // Toggle single-focus vs multi-audio (independent per-tile volume).
@@ -613,37 +764,258 @@ export class MultiView {
     }
   }
 
+  /**
+   * Pops a tile out into its own native always-on-top PiP window and removes
+   * it from the grid (removing it keeps a bad connection from carrying both
+   * the grid tile and the window). Each window gets a unique label so several
+   * can coexist - browser PiP allows only one, native Tauri windows don't.
+   */
+  async popOutToNativePip(channel) {
+    const rec = this.tiles.get(channel);
+    if (!rec) return;
+    // Suppresses the tab-out auto-PiP: creating a Tauri window steals focus,
+    // and without this a manual pop-out would trigger auto-PiP for the rest.
+    this.isOpeningPip = true;
+    try {
+      await this._doPopOutToNativePip(channel, rec);
+    } finally {
+      // Hold the flag briefly past creation so the focus-loss event (which
+      // arrives slightly after) is still suppressed.
+      setTimeout(() => { this.isOpeningPip = false; }, 800);
+    }
+  }
+
+  async _doPopOutToNativePip(channel, rec) {
+    const label = `pip-${channel.replace(/[^a-z0-9_-]/gi, "")}`;
+    // Adopt-and-close any stale window with this label before creating fresh.
+    const stale = await WebviewWindow.getByLabel(label).catch(() => null);
+    if (stale) await stale.close().catch(() => {});
+
+    // Pass the channel + quality, NOT the resolved m3u8 - a live m3u8 URL is
+    // huge (tokened usher URL) and breaks the pip.html query string. pip.js
+    // resolves it itself via get_live_m3u8_url.
+    // Popping out is an intent to watch this stream, so the PiP plays
+    // audible by default (at the tile's level, or full if it was muted in
+    // the grid) rather than inheriting a muted background tile's state.
+    const pipVolume = (rec.volumeLevel ?? 0) > 0 ? rec.volumeLevel : 1;
+    const params = new URLSearchParams({
+      mode: "mv",
+      mvchannel: channel,
+      mvquality: rec.quality || "best",
+      volume: String(pipVolume),
+      muted: "0",
+      channel,
+      kick: "0",
+    });
+    const win = new WebviewWindow(label, {
+      url: `pip.html?${params}`,
+      width: 480, height: 270,
+      minWidth: 192, minHeight: 108,
+      alwaysOnTop: true, decorations: false, resizable: true,
+      maximizable: false, skipTaskbar: false,
+      title: `PiP - ${channel}`,
+      visible: false,
+    });
+
+    // Only proceed once the window is actually created. If creation errors,
+    // leave the tile in the grid rather than stranding it.
+    let created = false;
+    try {
+      await new Promise((resolve, reject) => {
+        let timer = null;
+        const done = (fn, arg) => { if (timer) clearTimeout(timer); fn(arg); };
+        win.once("tauri://created", () => { created = true; done(resolve); });
+        win.once("tauri://error", (e) => done(reject, e?.payload || "window error"));
+        timer = setTimeout(() => (created ? resolve() : reject("timeout")), 4000);
+      });
+    } catch (err) {
+      console.error("[multiview] PiP window failed to create:", err);
+      try { await win.close(); } catch {}
+      return; // tile stays in the grid
+    }
+
+    // Bring the stream back into the grid when the PiP window closes. Guarded
+    // by a flag so a stray early 'destroyed' can't fire the re-add. Also set
+    // isOpeningPip briefly: closing the window can transiently blur the main
+    // window, and without this the tab-out auto-PiP would pop out a DIFFERENT
+    // tile in response.
+    let popped = true;
+    win.once("tauri://destroyed", async () => {
+      this.isOpeningPip = true;
+      setTimeout(() => { this.isOpeningPip = false; }, 800);
+      if (popped && this._open && !this.tiles.has(channel)) {
+        await this.addChannel(channel);
+        // You were hearing this stream in PiP, so keep it audible: focus it
+        // when it returns (unless multi-audio, where sliders own audio).
+        if (!this._multiAudio) this.focus(channel);
+      }
+    });
+
+    // Now that the window exists, remove the tile so we're not decoding twice.
+    this.removeChannel(channel);
+  }
+
   removeChannel(channel) {
     const record = this.tiles.get(channel);
     if (!record) return;
-    // Close its PiP first, else removing the video orphans the PiP window.
-    try {
-      if (document.pictureInPictureElement === record.videoEl) {
-        document.exitPictureInPicture().catch(() => {});
-      }
-    } catch {}
     if (record.hls) { record.hls.destroy(); record.hls = null; }
     try { record.videoEl.pause(); record.videoEl.removeAttribute("src"); record.videoEl.load(); } catch {}
     record.tileEl.remove();
     this.tiles.delete(channel);
     if (this.focusedChannel === channel) {
       this.focusedChannel = null;
-      // Hand audio focus (and the chat) to any remaining tile, or clear the
-      // chat if the grid is now empty.
+      // Hand focus (highlight + chat) to a remaining tile, but do NOT
+      // auto-unmute it - a background tile the user had silent shouldn't
+      // start blasting just because the focused tile was popped out. Pass
+      // keepAudio so focus() only moves the highlight/chat.
       const next = this.tiles.keys().next().value;
-      if (next) this.focus(next);
+      if (next) this.focus(next, { keepAudio: true });
       else this._connectChat(null);
     }
     this._refreshLayout();
   }
 
-  // Set grid columns by tile count; toggle the empty state.
+  // Choose the grid layout that makes the tiles as large as possible for the
+  // current window shape - so 2 streams stack vertically on a wide window but
+  // sit side by side on a tall one, etc. Special modes:
+  //   - exactly 2 tiles: a draggable divider (see _applySplitLayout)
+  //   - 3+ tiles with spotlight on: one big + a strip (see _applySpotlight)
   _refreshLayout() {
     const n = this.tiles.size;
     if (this.emptyEl) this.emptyEl.style.display = n === 0 ? "" : "none";
     if (this.countEl) this.countEl.textContent = n ? `${n} stream${n === 1 ? "" : "s"}` : "";
-    // Theater = 1 col; otherwise pack: 1->1, 2-4->2, 5-9->3.
-    const cols = this._theater ? 1 : (n <= 1 ? 1 : n <= 4 ? 2 : 3);
-    if (this.gridEl) this.gridEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    if (!this.gridEl) return;
+
+    // Clear mode classes; the branch below re-adds the right one.
+    this.gridEl.classList.remove("multiview-grid-split", "multiview-grid-spotlight");
+    this._removeSplitHandle();
+
+    if (this._theater || n <= 1) {
+      this.gridEl.style.gridTemplateColumns = "1fr";
+      this.gridEl.style.gridTemplateRows = "";
+      return;
+    }
+
+    if (n === 2) {
+      // Two tiles -> draggable split.
+      this._applySplitLayout();
+      return;
+    }
+
+    if (n >= 3 && this._spotlight) {
+      this._applySpotlight();
+      return;
+    }
+
+    // Auto-grid: pick the column count that yields the largest 16:9 tiles.
+    this._applyAutoGrid(n);
+  }
+
+  _applyAutoGrid(n) {
+    const gap = 6, pad = 6;
+    const boxW = this.gridEl.clientWidth - pad * 2;
+    const boxH = this.gridEl.clientHeight - pad * 2;
+    let cols;
+    if (boxW <= 0 || boxH <= 0) {
+      cols = n <= 4 ? 2 : 3;
+    } else {
+      let best = { cols: 1, tileW: 0 };
+      for (let c = 1; c <= n; c++) {
+        const r = Math.ceil(n / c);
+        const availW = boxW - gap * (c - 1);
+        const availH = boxH - gap * (r - 1);
+        if (availW <= 0 || availH <= 0) continue;
+        const tileW = Math.min(availW / c, (availH / r) * (16 / 9));
+        if (tileW > best.tileW) best = { cols: c, tileW };
+      }
+      cols = best.cols;
+    }
+    const rows = Math.max(1, Math.ceil(n / cols));
+    this.gridEl.style.gridTemplateRows = "";
+    const availW = boxW - gap * (cols - 1);
+    const availH = boxH - gap * (rows - 1);
+    if (availW > 0 && availH > 0) {
+      const tileW = Math.floor(Math.min(availW / cols, (availH / rows) * (16 / 9)));
+      this.gridEl.style.gridTemplateColumns = `repeat(${cols}, ${tileW}px)`;
+    } else {
+      this.gridEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    }
+  }
+
+  // Two-tile draggable split: the grid becomes two columns sized by _splitRatio
+  // (0..1), with a draggable handle between them. Tiles fill their cell (not
+  // forced 16:9) so dragging gives an exact split.
+  _applySplitLayout() {
+    if (this._splitRatio == null) this._splitRatio = 0.5;
+    this.gridEl.classList.add("multiview-grid-split");
+    this.gridEl.style.gridTemplateRows = "";
+    const left = Math.round(this._splitRatio * 100);
+    this.gridEl.style.gridTemplateColumns = `${left}fr ${100 - left}fr`;
+    this._addSplitHandle();
+    this._positionSplitHandle();
+  }
+
+  _addSplitHandle() {
+    if (this._splitHandle) return;
+    const handle = document.createElement("div");
+    handle.className = "multiview-split-handle";
+    handle.addEventListener("pointerdown", (e) => this._beginSplitDrag(e));
+    this.gridEl.parentElement.appendChild(handle);
+    this._splitHandle = handle;
+    this._positionSplitHandle();
+  }
+
+  _removeSplitHandle() {
+    if (this._splitHandle) { this._splitHandle.remove(); this._splitHandle = null; }
+  }
+
+  _positionSplitHandle() {
+    if (!this._splitHandle) return;
+    const wrap = this.gridEl.parentElement;
+    const pad = 6;
+    const usableW = this.gridEl.clientWidth - pad * 2;
+    const x = pad + usableW * (this._splitRatio ?? 0.5);
+    this._splitHandle.style.left = `${x}px`;
+  }
+
+  _beginSplitDrag(downEvent) {
+    downEvent.preventDefault();
+    const wrap = this.gridEl.parentElement;
+    const pad = 6;
+    const onMove = (e) => {
+      const rect = this.gridEl.getBoundingClientRect();
+      const usableW = rect.width - pad * 2;
+      let ratio = (e.clientX - rect.left - pad) / usableW;
+      ratio = Math.max(0.2, Math.min(0.8, ratio)); // clamp so neither tile vanishes
+      this._splitRatio = ratio;
+      const left = Math.round(ratio * 100);
+      this.gridEl.style.gridTemplateColumns = `${left}fr ${100 - left}fr`;
+      this._positionSplitHandle();
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  // Spotlight (3+): the focused tile fills the main area, the rest sit in a
+  // small strip. Clicking a strip tile focuses it (promotes it to the big slot).
+  _applySpotlight() {
+    this.gridEl.classList.add("multiview-grid-spotlight");
+    // Ensure something is focused (the big tile).
+    if (!this.focusedChannel || !this.tiles.has(this.focusedChannel)) {
+      const first = this.tiles.keys().next().value;
+      if (first) this.focusedChannel = first;
+    }
+    const stripCount = Math.max(1, this.tiles.size - 1);
+    // Top row = main (flexible), bottom row = strip (~20%); strip has one
+    // column per non-main tile so they sit side by side.
+    this.gridEl.style.gridTemplateRows = "1fr 20%";
+    this.gridEl.style.gridTemplateColumns = `repeat(${stripCount}, 1fr)`;
+    for (const [ch, rec] of this.tiles) {
+      rec.tileEl.classList.toggle("multiview-tile-spot-main", ch === this.focusedChannel);
+    }
   }
 }

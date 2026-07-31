@@ -24,74 +24,50 @@
     </div>
 
     <div id="app">
-      <!--
-        Lives as a sibling of <header>, not inside it - header is what
-        gets collapsed (grid row height -> 0, see #app.header-collapsed
-        below), so the toggle to bring it back has to live somewhere that
-        ISN'T removed along with it. position:fixed keeps it pinned to
-        the same screen location regardless of the grid's current state,
-        same reasoning as #quality-menu being a sibling of #app entirely
-        (see its own comment further down) rather than nested inside
-        whatever it's positioned relative to.
-      -->
-      <button id="header-collapse-toggle" class="header-collapse-toggle" title="Collapse top bar">
-        <svg viewBox="0 0 24 24" width="12" height="12"><path d="M7 10l5 5 5-5z" fill="currentColor"/></svg>
-      </button>
       <header>
         <div class="nav-tabs">
           <button id="home-tab" class="nav-tab nav-tab-active">Home</button>
           <button id="browse-tab" class="nav-tab">Browse</button>
           <button id="multiview-tab" class="nav-tab" title="Watch several streams at once">MultiView</button>
         </div>
-        <!--
-          Platform toggle: which service Home/Browse/search/watching all
-          point at. One button, two states - Twitch (purple border,
-          default) and Kick (green border) - clicked to flip between
-          them. Lives right of the nav tabs because it changes what
-          those tabs SHOW; state + everything that reacts to it lives in
-          platform.js and applyPlatformUi() in main.js.
-        -->
-        <button id="platform-toggle" class="platform-toggle platform-twitch" title="Switch platform">Twitch</button>
+        <div class="header-actions">
         <!--
           Shown only while a stream is running AND Home/Browse is currently
-          covering it (see updateBackToStreamBtn() in main.js) - the
-          <video> pipeline keeps playing in the background the whole
-          time you're browsing (this was already true before this button
-          existed; switching tabs only ever hid #video-frame, never
-          actually stopped playback), but there was previously no way back
-          to it except re-clicking the same channel from a card/sidebar
-          entry, which restarted the stream from scratch instead of just
-          bringing the still-running one back into view.
+          covering it (see updateBackToStreamBtn() in main.js).
         -->
         <button id="back-to-stream-btn" class="back-to-stream-btn" style="display:none">
           <svg viewBox="0 0 24 24" width="14" height="14"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
           <span id="back-to-stream-label">Now watching</span>
         </button>
-        <!-- Input and its action are one attached control: the button is
-             the verb for the field, so they share a border and read as a
-             single launcher instead of two floating elements. -->
+        <!-- Input + Watch as one attached launcher, with a leading search icon. -->
         <div class="channel-launcher">
+          <svg class="launcher-search-icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <input id="channel-input" type="text" placeholder="Twitch channel name" />
           <button id="watch-btn">Watch</button>
         </div>
-        <!-- Status sits NEXT to the launcher (cause and effect together)
-             as a quiet pill; empty when idle - the old far-right
-             "Playing: x" was both redundant and stranded. -->
-        <span class="status" id="status-text"></span>
-        <!-- Account control lives at the right edge like every app's;
-             it was previously mid-left, styled like an action button,
-             which made a username read as a mystery action. -->
-        <button id="login-btn">Log in with Twitch</button>
         <!--
-          Kick login, shown only in Kick mode (applyPlatformUi toggles
-          it). Separate button + separate OAuth flow from Twitch's -
-          the two logins are independent (see kick_oauth.rs). Reuses the
-          login-btn styling; the platform-kick class tints it green.
-          When the build ships without a real Kick client secret,
-          applyPlatformUi hides it and shows an inline note instead
-          (kick_oauth_configured gates this).
+          Platform toggle: which service Home/Browse/search/watching all point
+          at. One button, two states - Twitch (default) / Kick - clicked to
+          flip. State + everything reacting to it lives in platform.js and
+          applyPlatformUi() in main.js.
+        -->
+        <button id="platform-toggle" class="platform-toggle platform-twitch" title="Switch platform">
+          <svg class="platform-icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M4 3h16v11l-4 4h-4l-3 3H7v-3H4V3zm2 2v9h3v3l3-3h4l2-2V5H6zm5 2h2v5h-2V7zm5 0h2v5h-2V7z" fill="currentColor"/></svg>
+          <span class="platform-label">Twitch</span>
+        </button>
+        <!-- Status sits next to the launcher as a quiet pill; empty when idle. -->
+        <span class="status" id="status-text"></span>
+        <!-- Account control; person icon + label. -->
+        <button id="login-btn">
+          <svg class="account-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 12a4 4 0 100-8 4 4 0 000 8zm0 2c-4 0-7 2-7 5v1h14v-1c0-3-3-5-7-5z" fill="currentColor"/></svg>
+          <span class="login-label">Log in with Twitch</span>
+        </button>
+        <!--
+          Kick login, shown only in Kick mode (applyPlatformUi toggles it).
+          Separate button + OAuth flow from Twitch's (see kick_oauth.rs).
         -->
         <button id="kick-login-btn" class="platform-kick" style="display:none">Log in with Kick</button>
+        </div>
       </header>
 
       <div id="channels-sidebar">

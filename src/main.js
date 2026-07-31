@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, currentMonitor, availableMonitors, cursorPosition } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { TwitchChat } from "./chat.js";
@@ -24,7 +24,7 @@ import { MultiView } from "./multiview.js";
 import { updateDropsBanner, hideDropsBanner, resetDropsDismissal } from "./drops-banner.js";
 import {
   initLayout, switchPage, updateBackToStreamBtn, setTheaterMode,
-  toggleTheaterModeAndResync, toggleHeaderCollapse, toggleChatCollapse, toggleFullscreen,
+  toggleTheaterModeAndResync, toggleChatCollapse, toggleFullscreen,
   isAppFullscreen,
 } from "./layout.js";
 import {
@@ -45,7 +45,6 @@ const chatInput = document.getElementById("chat-input");
 const chatSendBtn = document.getElementById("chat-send-btn");
 const appEl = document.getElementById("app");
 const theaterBtn = document.getElementById("theater-btn");
-const headerCollapseToggle = document.getElementById("header-collapse-toggle");
 const chatCollapseToggle = document.getElementById("chat-collapse-toggle");
 const chatExpandStrip = document.getElementById("chat-expand-strip");
 const fullscreenBtn = document.getElementById("fullscreen-btn");
@@ -525,6 +524,82 @@ document.getElementById("multiview-tab")?.addEventListener("click", () => {
 homeTab.addEventListener("click", () => { if (multiview.isOpen) multiview.close(); });
 browseTab.addEventListener("click", () => { if (multiview.isOpen) multiview.close(); });
 
+// Auto-PiP on tab-out (opt-in via the settings-menu toggle). When the app
+// window loses focus and something is playing, pop into PiP automatically;
+// re-focusing the app closes it again. Uses Tauri's window focus event, which
+// (unlike window 'blur') fires only for real OS focus changes, not in-app
+// focus moves. Guarded so it never fires while typing or when nothing plays.
+let _autoPipActive = false;
+let _autoPipPendingTimer = null;
+
+// True if the mouse cursor is on a DIFFERENT monitor than the app window.
+// Used to tell "clicked something on my other screen" (don't PiP) from
+// "alt-tabbed away on this screen" (do PiP). Best-effort: if anything can't
+// be resolved, returns false so auto-PiP still fires (fail-open).
+async function cursorIsOnOtherMonitor() {
+  try {
+    const [cur, appMon, mons] = await Promise.all([
+      cursorPosition(),
+      currentMonitor(),
+      availableMonitors().catch(() => []),
+    ]);
+    if (!cur || !appMon || !mons.length) return false;
+    const inRect = (m) =>
+      cur.x >= m.position.x && cur.x < m.position.x + m.size.width &&
+      cur.y >= m.position.y && cur.y < m.position.y + m.size.height;
+    const cursorMon = mons.find(inRect);
+    if (!cursorMon) return false; // cursor off all screens: treat as same
+    // Compare by origin (monitors are uniquely placed on the virtual desktop).
+    return cursorMon.position.x !== appMon.position.x ||
+           cursorMon.position.y !== appMon.position.y;
+  } catch {
+    return false;
+  }
+}
+
+appWindow.onFocusChanged(async ({ payload: focused }) => {
+  if (localStorage.getItem("autoPipOnBlur") !== "1") return;
+
+  if (!focused) {
+    if (_autoPipActive) return;
+    // Don't fire when the focus loss was caused by us opening a PiP window
+    // (creating a Tauri window steals focus) - otherwise a manual pop-out
+    // cascades into popping out every remaining tile.
+    if (multiview.isOpeningPip || playbackControls._openingPip) return;
+    // Skip if the user just clicked onto another monitor (vs. genuinely
+    // switching away from the app on this screen).
+    if (await cursorIsOnOtherMonitor()) return;
+
+    // Debounce: a real tab-out keeps focus away, but a screenshot-tool region
+    // overlay (ShareX Ctrl+PrtScn), a notification toast, or a quick click
+    // steals focus only momentarily. Wait, and only PiP if focus hasn't come
+    // back. The re-focus branch below clears this timer.
+    if (_autoPipPendingTimer) clearTimeout(_autoPipPendingTimer);
+    _autoPipPendingTimer = setTimeout(async () => {
+      _autoPipPendingTimer = null;
+      // Re-check guards at fire time (state may have changed during the wait).
+      if (_autoPipActive) return;
+      if (multiview.isOpeningPip || playbackControls._openingPip) return;
+      if (multiview.isOpen) {
+        if (multiview.focusedChannel) {
+          await multiview.popOutToNativePip(multiview.focusedChannel);
+          _autoPipActive = true;
+        }
+      } else if (session.playing) {
+        try { await playbackControls.enterNativePip(); _autoPipActive = true; } catch {}
+      }
+    }, 600);
+  } else {
+    // Focus came back. Cancel a pending PiP (the blip was brief - screenshot,
+    // toast, etc.), and close any auto-PiP we did open.
+    if (_autoPipPendingTimer) { clearTimeout(_autoPipPendingTimer); _autoPipPendingTimer = null; }
+    if (_autoPipActive) {
+      _autoPipActive = false;
+      if (!multiview.isOpen) { try { playbackControls.closePipAnyTier?.(); } catch {} }
+    }
+  }
+});
+
 // Show the running app version in the window title, so which build is
 // live is visible at a glance (handy for verifying an update actually
 // applied). getVersion() reads the version baked in from tauri.conf.json.
@@ -782,7 +857,7 @@ function setStatus(text) {
 
 theaterBtn.addEventListener("click", toggleTheaterModeAndResync);
 
-headerCollapseToggle.addEventListener("click", toggleHeaderCollapse);
+
 
 chatCollapseToggle.addEventListener("click", toggleChatCollapse);
 chatExpandStrip.addEventListener("click", toggleChatCollapse);
@@ -1950,7 +2025,9 @@ function applyPlatformUi() {
   // Flips every accent color in the stylesheet at once - the CSS
   // variables at the top of styles.css key off body.kick-mode.
   document.body.classList.toggle("kick-mode", kick);
-  platformToggleBtn.textContent = kick ? "Kick" : "Twitch";
+  const platformLabel = platformToggleBtn.querySelector(".platform-label");
+  if (platformLabel) platformLabel.textContent = kick ? "Kick" : "Twitch";
+  else platformToggleBtn.textContent = kick ? "Kick" : "Twitch";
   platformToggleBtn.classList.toggle("platform-kick", kick);
   platformToggleBtn.classList.toggle("platform-twitch", !kick);
   channelInput.placeholder = kick ? "Kick channel name" : "Twitch channel name";

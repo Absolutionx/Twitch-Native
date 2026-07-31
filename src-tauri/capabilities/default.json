@@ -4,7 +4,8 @@
   "description": "Default capabilities for the main window",
   "windows": [
     "main",
-    "pip"
+    "pip",
+    "pip-*"
   ],
   "permissions": [
     "core:default",
